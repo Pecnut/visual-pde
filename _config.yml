@@ -18,13 +18,13 @@
 # You can create any custom variable you would like, and they will be accessible
 # in the templates via {{ site.myvariable }}.
 
-title: VisualPDE Canary
+title: VisualPDE
 longtitle: VisualPDE - simulate and explore PDEs in your browser
 email: hello@visualpde.com
 description: >- # this means to ignore newlines until "baseurl:"
   VisualPDE brings interactive science and mathematics to the web. Explore topics including waves, viruses and reaction—diffusion patterns, or create your own simulation.
 #baseurl: "/site" # the subpath of your site, e.g. /blog
-url: "https://canary.visualpde.com" # the base hostname & protocol for your site, e.g. http://example.com
+url: "https://visualpde.com" # the base hostname & protocol for your site, e.g. http://example.com
 #twitter_username: pecnut
 #github_username:  Pecnut
 google_analytics: G-ZDK91GRY6Y

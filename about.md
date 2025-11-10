@@ -47,6 +47,32 @@ If you use VisualPDE in your research, we'd be grateful if you could cite our ar
 ## Is it free?
 Everyone is free to use VisualPDE. For specifics of industrial use, see our [licence](https://github.com/Pecnut/visual-pde/blob/main/LICENSE.md).
 
+## VisualPDE in the wild
+
+VisualPDE is used around the world to teach, engage and interact with mathematics and science. Here are some examples of VisualPDE in action:
+- <span id="citing-articles">20+</span> citing articles on [Semantic Scholar](https://www.semanticscholar.org/paper/1e2228a2a63cb025c65bcba930f9118e4d26c081)
+- An interactive logo for the [Society for Mathematical Biology](https://smb.org)
+- A simulation-rich [blog post](https://blogs.comphy-lab.org/Blog/2025-visual-pdes) by Vatsal Sanjay summarising VisualPDE
+- A *Plus* magazine [article](https://plus.maths.org/content/playing-visualpde) and [podcast](https://plusmathsorg.podbean.com/e/playing-with-visualpde/) on using VisualPDE to explore research in virus transmission
+- A *Teaching and Learning Mathematics Online* [webinar](https://www.youtube.com/watch?v=tJ_LBR4OQXc) exploring VisualPDE
+
 ## The team
 
 VisualPDE is a team effort, written and maintained by [Benjamin Walker](https://benjaminwalker.info/), [Adam Townsend](https://adamtownsend.com/) and [Andrew Krause](https://www.andrewkrause.org/).
+
+<script type="text/javascript">
+    async function fetchCitingArticlesCount() {
+        const response = await fetch('https://api.semanticscholar.org/graph/v1/paper/10.1007/s11538-023-01218-4?fields=citationCount');
+        const data = await response.json();
+        if (!response.ok) {
+            console.error('Error fetching citation count:', data);
+            return 'N/A';
+        }
+        return data.citationCount;
+    }
+    
+    fetchCitingArticlesCount().then(count => {
+        if (count === 'N/A') return;
+        document.getElementById('citing-articles').textContent = count;
+    });
+</script>

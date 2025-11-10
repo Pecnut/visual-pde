@@ -25,7 +25,10 @@
       name="twitter:image"
       content="https://visualpde.com/assets/favicons/twitter-icon.webp"
     />
-    <meta name="description" content="An interactive simulation of a partial differential equation, live in your browser with VisualPDE." />
+    <meta
+      name="description"
+      content="An interactive simulation of a partial differential equation, live in your browser with VisualPDE."
+    />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="Interactive simulation | VisualPDE" />
     <meta
@@ -102,7 +105,7 @@
             .catch(() => {
               // Fetch the full link from the endpoint.
               const endpoint =
-                "https://tei7tdcm2qguyv62634whl2qty0qaegv.lambda-url.us-east-1.on.aws?shortKey=";
+                "https://link-shortener.8dsf27772t.workers.dev?shortKey=";
               fetch(endpoint + searchParams.get("mini"), {
                 signal: AbortSignal.timeout(5000),
               })
@@ -117,14 +120,16 @@
                   }
                 })
                 .then((data) => {
-                  if (data)
-                    if (typeof data === "string") {
-                      handleMiniOpts(data, true);
+                  if (data) {
+                    const url = data["originalURL"];
+                    if (typeof url === "string") {
+                      handleMiniOpts(url, true);
                     } else {
                       // We've tried everything. The link is bad.
                       badLink = true;
                       linkParsed = true;
                     }
+                  }
                 })
                 .catch(() => {
                   badLink = true;
@@ -281,7 +286,10 @@
         Some simulations on VisualPDE.com may contain flashing images and
         patterns.
       </p>
-      <p style="font-size: 0.5em;">We use analytics cookies to evidence VisualPDE's impact to funders. By using this site, you consent to the use of cookies.</p>
+      <p style="font-size: 0.5em">
+        We use analytics cookies to evidence VisualPDE's impact to funders. By
+        using this site, you consent to the use of cookies.
+      </p>
       <div id="lets_go_cont" style="display: none">
         <button id="lets_go" class="btn-primary highlight">
           OK, let's go!
@@ -405,7 +413,8 @@
         >, and reload the page if the interface is unresponsive.
       </p>
       <button class="btn-primary highlight" id="error_fix_button">
-        <i class="fa-solid fa-plus icon_on_text_button"></i><span id="error_fix_button_text"></span>
+        <i class="fa-solid fa-plus icon_on_text_button"></i
+        ><span id="error_fix_button_text"></span>
       </button>
       <button class="btn-primary message_dismiss" id="error_close_button">
         <i class="fa-solid fa-xmark icon_on_text_button"></i>Close

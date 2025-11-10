@@ -2607,9 +2607,8 @@ async function VisualPDE(url) {
       .name("# Species")
       .onChange(function () {
         document.activeElement.blur();
-        options.speciesNames = listOfSpecies
-          .slice(0, options.numSpecies)
-          .join(" ");
+        options.speciesNames = speciesNamesToString();
+        setCustomNames();
         updateProblem();
         resetSim();
       });
@@ -5428,6 +5427,8 @@ async function VisualPDE(url) {
 
     // Set custom species names and reaction names.
     setCustomNames();
+    // Trim speciesNames such that there are only numSpecies names.
+    options.speciesNames = speciesNamesToString();
     // Ensure that the correct play/pause button is showing.
     isRunning ? playSim() : pauseSim();
 
@@ -6679,6 +6680,9 @@ async function VisualPDE(url) {
     let paramPlaceholders = Array.from(Array(paramNames.length).keys()).map(
       (s) => "PARAMETER_" + s.toString(),
     );
+    let defaultSpeciesPlaceholders = Array.from(
+      Array(listOfSpecies.length).keys(),
+    ).map((s) => "DEFAULTSPECIES_" + s.toString());
 
     if (options.typesetCustomEqs) {
       // We'll work using the default notation, then convert at the end.
@@ -6732,6 +6736,15 @@ async function VisualPDE(url) {
           associatedStrs[key],
           paramNames,
           paramPlaceholders,
+        );
+      });
+
+      // Check for any default variable names in the associated strings that don't correspond to current species names. Replace them with placeholders to prevent accidental typesetting as another symbol.
+      Object.keys(associatedStrs).forEach(function (key) {
+        associatedStrs[key] = replaceSymbolsInStr(
+          associatedStrs[key],
+          defaultSpecies.filter((s) => !listOfSpecies.includes(s)),
+          defaultSpeciesPlaceholders,
         );
       });
 
@@ -6956,6 +6969,9 @@ async function VisualPDE(url) {
 
     // Remove parameter placeholders with parameter names.
     str = replaceSymbolsInStr(str, paramPlaceholders, paramNames);
+
+    // Remove default species placeholders with original default species names.
+    str = replaceSymbolsInStr(str, defaultSpeciesPlaceholders, defaultSpecies);
 
     str = parseStringToTEX(str);
 
@@ -8537,6 +8553,10 @@ async function VisualPDE(url) {
       .trim()
       .split(" ")
       .slice(0, defaultSpecies.length);
+  }
+
+  function speciesNamesToString() {
+    return listOfSpecies.slice(0, options.numSpecies).join(" ");
   }
 
   /**
@@ -11457,16 +11477,25 @@ async function VisualPDE(url) {
 
     shortenAborter = new AbortController();
     const signal = shortenAborter.signal;
-    const endpoint =
-      "https://tei7tdcm2qguyv62634whl2qty0qaegv.lambda-url.us-east-1.on.aws?originalURL=";
-    fetch(endpoint + opts, { signal: signal })
-      .then((response) => response.json())
-      .then((shortKey) => {
-        if (shortKey) {
-          // Check if shortKey is just a string - if not, it's an error.
-          if (typeof shortKey === "string") {
-            saveShortURL(opts, shortKey);
-          }
+    const endpoint = "https://link-shortener.8dsf27772t.workers.dev";
+    // opts contains the original URL
+    fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ originalURL: opts }),
+      signal: signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          console.log("Error creating short URL:", response.status);
+          return;
+        }
+
+        const data = await response.json();
+        const shortKey = data.shortKey;
+
+        if (shortKey && typeof shortKey === "string") {
+          saveShortURL(opts, shortKey);
         }
       })
       .catch(() => {});

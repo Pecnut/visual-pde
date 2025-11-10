@@ -9,13 +9,13 @@ categories: [linear, elasticity, hyperbolic]
 ---
 Let's consider a (damped) [beam equation](https://en.wikipedia.org/wiki/Euler%E2%80%93Bernoulli_beam_theory):
 
-$$\pdd{u}{t}+ C\pd{u}{t}=-D^2 \frac{\partial^4 u}{\partial x^4} u-Q,$$
+$$\pdd{u}{t}+ C\pd{u}{t}=-D^2 \frac{\partial^4 u}{\partial x^4} -Q,$$
 
 initially with fixed boundary conditions given by
 
 $$u=0 \quad \text{and} \quad \pdd{u}{x} = 0 $$
 
-along the boundary. The constant $D$ represents the relative size of the domain and its material properties (e.g. stiffness), $C>0$ is a damping constant, and $q>0$ a gravity-like force.
+along the boundary. The constant $D$ represents the relative size of the domain and its material properties (e.g. stiffness), $C>0$ is a damping constant, and $Q>0$ a gravity-like force.
 
 * Load the interactive [beam equation simulation](/sim/?preset=BeamEquation). 
 

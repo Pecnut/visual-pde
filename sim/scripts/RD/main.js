@@ -2607,6 +2607,7 @@ async function VisualPDE(url) {
       .name("# Species")
       .onChange(function () {
         document.activeElement.blur();
+        // Get species names as a string, trimmed so that there are only as many species as selected.
         options.speciesNames = speciesNamesToString();
         setCustomNames();
         updateProblem();
@@ -5427,8 +5428,6 @@ async function VisualPDE(url) {
 
     // Set custom species names and reaction names.
     setCustomNames();
-    // Trim speciesNames such that there are only numSpecies names.
-    options.speciesNames = speciesNamesToString();
     // Ensure that the correct play/pause button is showing.
     isRunning ? playSim() : pauseSim();
 

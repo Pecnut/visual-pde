@@ -2,6 +2,56 @@
 
 let presets = {};
 
+presets["Polar diffusion"] = {
+  boundaryConditions_1: "combo",
+  brushRadius:
+    "ind(abs(y - mod(atan((yB-L_y/2),(xB-L_x/2-MINX)),2*pi)*L_y/(2*pi)) < 0.1)*ind(abs(x - sqrt((xB-L_x/2-MINX)^2+(yB-L_y/2)^2)) < L_x/100)",
+  brushType: "custom",
+  comboStr_1:
+    "Bottom: Periodic; Left: Neumann = 0; Right: Neumann = 0; Top: Periodic;",
+  diffusionStr_1_1: "0",
+  diffusionStr_2_2: "0",
+  diffusionStr_3_3: "0",
+  domainScale: "20",
+  dt: 0.00001,
+  initCond_1: "0",
+  kineticParams: "D = 1;",
+  minX: "1",
+  minY: "0",
+  numSpecies: "1",
+  numTimestepsPerFrame: 201,
+  preset: "Polar diffusion",
+  reactionStr_1: "D*(u_xx + u_x + u_yy)",
+  reactionStr_2: "0",
+  reactionStr_3: "0",
+  spatialStep: "0.02",
+  speciesNames: "u",
+  squareCanvas: true,
+  views: [
+    {
+      maxColourValue: "1",
+      minColourValue: "0",
+      whatToPlot:
+        "u[sqrt((x-L_x/2-MINX)^2+(y-L_y/2)^2), atan((y-L_y/2),(x-L_x/2-MINX))*L_y/(2*pi)]",
+      name: "Polar",
+    },
+    {
+      maxColourValue: "0.37",
+      minColourValue: "0",
+      whatToPlot: "u",
+      name: "$r$-$\\theta$ plane",
+    },
+    {
+      maxColourValue: "6.282184600830078",
+      minColourValue: "0.0010009281104430556",
+      whatToPlot: "mod(atan((y-L_y/2),(x-L_x/2-MINX)),2*pi)",
+      name: 4,
+    },
+  ],
+  whatToDraw: "u",
+  simTitle: "Polar simulation",
+};
+
 presets["quantumTunneling"] = {
   brushType: "vline",
   diffusionStr_1_1: "0",
@@ -2986,6 +3036,32 @@ presets["ducks"] = {
   simTitle: "Ducks",
 };
 
+presets["forestFires3DMoor"] = {
+  imagePathTwo: "./images/topographyMoor.png",
+  parent: "forestFires3D",
+  preset: "forestFires3DMoor",
+  views: [
+    {
+      cameraTheta: 39.60000000000032,
+      cameraPhi: 13.679999999999934,
+      colourmap: "fireOnTerrain",
+      colourbar: false,
+      customSurface: true,
+      emboss: true,
+      embossSmoothness: 0.01,
+      embossSpecular: 0,
+      flippedColourmap: false,
+      maxColourValue: "1",
+      minColourValue: "0",
+      plotType: "surface",
+      surfaceFun: "200*I_T",
+      whatToPlot:
+        "ind(S>0.01)*0.7*S^2 + ind(T>0.5)*(0.7+T/7*0.3) + ind(S<=0.01)*ind(T<=0.5)*(1-I_T^2-0.6)*0.7",
+      name: "Fire on Topography",
+    },
+  ],
+};
+
 presets["forestFires3D"] = {
   imagePathTwo: "./images/topography.webp",
   initCond_2: "1-I_T^2",
@@ -3163,7 +3239,7 @@ presets["maskFront"] = {
   overlayColour: 16777215,
   overlayEpsilon: 0.01,
   overlayExpr: "(x/L_x)^2 + 5*(y/L_y+y_offset)^2 - 0.005",
-  preset: "PRESETNAME",
+  preset: "maskFront",
   resetOnImageLoad: true,
   reactionStr_1: "-c*(u_x + v_y) - u*c_x - v*c_y",
   reactionStr_2:
@@ -4197,7 +4273,7 @@ presets["RedGreyInvasionUK"] = {
   minColourValue: "0",
   minX: "-L_x/2",
   minY: "-L_y/2",
-  preset: "PRESETNAME",
+  preset: "RedGreyInvasionUK",
   resetOnImageLoad: true,
   reactionStr_1: "R*(1-c_RR*R-c_RG*G)",
   reactionStr_2: "G*(1-c_GR*R-c_GG*G)",

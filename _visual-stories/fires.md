@@ -70,7 +70,7 @@ Let’s move to a real-world example: Saddleworth Moor in Greater Manchester, wh
 
 In the simulation below, we use the real elevation profile of the area, but remove vegetation where roads, waterways, or urban/suburban land occur. As before, click anywhere to ignite a fire and explore how it spreads under different wind conditions.
 
-<iframe class="sim" id="simD" src="/sim/?preset=forestFires3D&story&sf=1&reset_only&nomathjax" style="width:70%;max-width:70%;aspect-ratio:1" frameborder="0" loading="lazy"></iframe>
+<iframe class="sim" id="simD" src="/sim/?preset=forestFires3DMoor&story&sf=1&reset_only&nomathjax" style="width:70%;max-width:70%;aspect-ratio:1" frameborder="0" loading="lazy"></iframe>
 <p style="text-align:center;margin-top:0;display:none;"><vpde-slider
     iframe="simD"
     name="theta"

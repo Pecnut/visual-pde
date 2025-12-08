@@ -1,6 +1,7 @@
 // auxiliary_GLSL_funs.js
 export function auxiliary_GLSL_funs() {
   return `const float pi = 3.141592653589793;
+  uniform bool isTwoD;
   float H(float VALUE) 
     {
         float RES = smoothstep(-0.01, 0.01, VALUE);
@@ -33,7 +34,11 @@ export function auxiliary_GLSL_funs() {
     }
 
     float Bump(float x, float y, float MX, float MY, float MAXR) {
-      float RADIUSSQ = ((x-MX)*(x-MX)+(y-MY)*(y-MY)) / (MAXR*MAXR);
+      float yDiff = 0.0;
+      if (isTwoD) {
+        yDiff = y - MY;
+      }
+      float RADIUSSQ = ((x-MX)*(x-MX)+(yDiff)*(yDiff)) / (MAXR*MAXR);
       if (RADIUSSQ < 1.0) {
         return exp(1.0-1.0/(1.0-RADIUSSQ));
       } else {

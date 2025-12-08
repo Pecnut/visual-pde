@@ -1769,6 +1769,9 @@ async function VisualPDE(url) {
       imageSourceBlend: {
         type: "t",
       },
+      isTwoD: {
+        type: "bool",
+      },
       L: {
         type: "f",
       },
@@ -3058,6 +3061,7 @@ async function VisualPDE(url) {
         Midnight: "midnight",
         Pastels: "pastels",
         Pride: "pride",
+        "Red-green": "redGreen",
         Retro: "retro",
         "Simply blue": "blue",
         "Snow Ghost": "snowghost",
@@ -8120,6 +8124,7 @@ async function VisualPDE(url) {
       }
     }
     if (options.dimension == 1) options.minY = "0.0";
+    uniforms.isTwoD.value = options.dimension == 2;
     resize();
     setRDEquations();
     setEquationDisplayType();

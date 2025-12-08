@@ -1,6 +1,13 @@
 export function getColours(sel) {
   let colours = [];
   switch (sel) {
+    case "redGreen":
+      colours.push([0.89, 0.07, 0.18, 0.0]);
+      colours.push([0.95, 0.53, 0.24, 0.25]);
+      colours.push([0.93, 0.82, 0.31, 0.5]);
+      colours.push([0.62, 0.82, 0.32, 0.75]);
+      colours.push([0.11, 0.64, 0.23, 1.0]);
+      break;
     case "fireOnTerrain":
       colours.push([0.51, 0.36, 0.33, 0.0]);
       colours.push([1, 0.99, 0.59, 0.45]);

@@ -3315,13 +3315,13 @@ presets["bacteriaInAReach2D"] = {
   domainViaIndicatorFun: true,
   imagePathOne: "./images/river.png",
   kineticParams:
-    "c0 = 0.1 in [0, 1];c1 = 0 in [0, 1];k = 0.006 in [0, 0.05];u = 1 in [0.1, 4];",
+    "c0 = 0.5 in [0, 1];c1 = 0 in [0, 1];k = 0.006 in [0, 0.05];u = 1 in [0.1, 4];",
   maxColourValue: "5",
   overlayExpr: "I_S",
   parent: "bacteriaInAReach",
   plotType: "plane",
   reactionStr_1:
-    "-u*C_xb - 5*(0.4*L_y-y)*C_y/L_y - k*C + c0*0.1*Bump(0,L_y/2,L/20) + c1*0.1*Bump(L_x/2,0.7*L_y,L/20)",
+    "-u*C_xb - 5*(0.4*L_y-y)*C_y/L_y - k*C + c0*0.1*Bump(0,L_y/2,L/20)/u + c1*0.1*Bump(L_x/2,0.7*L_y,L/20)/u",
   views: [
     {
       name: "Concentration",
@@ -3340,15 +3340,16 @@ presets["bacteriaInAReach"] = {
   brushAction: "smoothadd",
   brushRadius: "20",
   brushType: "vline",
-  brushValue: "min(0.02, 1-C)",
+  brushValue: "min(1, max(0,5-C))",
   colourbar: true,
-  colourmap: "turbo",
+  colourmap: "redGreen",
   comboStr_1: "Left: Dirichlet = c0; Right: Ghost = 0;",
   diffusionStr_1_1: "0",
   diffusionStr_2_2: "0",
   dimension: "1",
   domainScale: "320",
   dt: 0.01,
+  flippedColourmap: true,
   initCond_1: "0",
   initCond_2: "0",
   kineticParams:

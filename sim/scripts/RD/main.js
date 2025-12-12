@@ -544,7 +544,7 @@ async function VisualPDE(url) {
     }
     showColourbarOverride =
       newParams.colourbar == "true" || newParams.colourbar == true;
-    if (Object.keys(newParams).length) loadPreset(newParams, true);
+    if (Object.keys(newParams).length) loadPreset(newParams, true, true);
   }
 
   if (params.has("view")) {
@@ -2627,7 +2627,7 @@ async function VisualPDE(url) {
         resetSim();
       });
 
-    root
+    controllers["speciesNames"] = root
       .add(options, "speciesNames")
       .name("Species names")
       .onFinishChange(function () {
@@ -5286,9 +5286,9 @@ async function VisualPDE(url) {
     );
   }
 
-  function loadPreset(preset, updateView = false) {
+  function loadPreset(preset, updateView = false, overrideIsLoading = false) {
     // Updates the values stored in options.
-    loadOptions(preset);
+    loadOptions(preset, overrideIsLoading);
 
     // Maintain compatibility with links/presets that set the deprecated threeD or oneDimensional options.
     if (options.threeD != undefined) {
@@ -5373,7 +5373,7 @@ async function VisualPDE(url) {
     configureManualInterpolation();
   }
 
-  function loadOptions(preset) {
+  function loadOptions(preset, overrideIsLoading = false) {
     let newOptions;
     const listOfPresetNames = getListOfPresetNames();
     const listOfPresetNamesLower = listOfPresetNames.map((x) =>
@@ -5430,7 +5430,7 @@ async function VisualPDE(url) {
     isRunning = options.runningOnLoad;
 
     // Set custom species names and reaction names.
-    setCustomNames();
+    setCustomNames(overrideIsLoading);
     // Trim speciesNames such that there are only numSpecies names.
     options.speciesNames = speciesNamesToString();
     // Ensure that the correct play/pause button is showing.
@@ -8574,7 +8574,7 @@ async function VisualPDE(url) {
    * Sets custom names for species and reactions, swapping out species in all user-editable strings.
    * @returns {void}
    */
-  function setCustomNames() {
+  function setCustomNames(overrideIsLoading = false) {
     let oldListOfSpecies;
     if (listOfSpecies != undefined) {
       oldListOfSpecies = listOfSpecies;
@@ -8647,7 +8647,7 @@ async function VisualPDE(url) {
     });
 
     // Don't update the problem if we're just loading in, as this will be done as part of loading.
-    if (isLoading) return;
+    if (isLoading && !overrideIsLoading) return;
 
     // If we're not loading in, go through options and replace the old species with the new ones.
     const excludes = [

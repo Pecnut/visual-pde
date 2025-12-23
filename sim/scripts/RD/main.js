@@ -495,7 +495,7 @@ async function VisualPDE(url) {
   }
 
   // Load default options.
-  loadOptions("default");
+  loadOptions({ preset: "default", isInitialLoad: true });
 
   // Initialise simulation and GUI.
   init();
@@ -5288,7 +5288,7 @@ async function VisualPDE(url) {
 
   function loadPreset(preset, updateView = false, overrideIsLoading = false) {
     // Updates the values stored in options.
-    loadOptions(preset, overrideIsLoading);
+    loadOptions({ preset: preset, overrideIsLoading: overrideIsLoading });
 
     // Maintain compatibility with links/presets that set the deprecated threeD or oneDimensional options.
     if (options.threeD != undefined) {
@@ -5373,7 +5373,11 @@ async function VisualPDE(url) {
     configureManualInterpolation();
   }
 
-  function loadOptions(preset, overrideIsLoading = false) {
+  function loadOptions({
+    preset,
+    overrideIsLoading = false,
+    isInitialLoad = false,
+  } = {}) {
     let newOptions;
     const listOfPresetNames = getListOfPresetNames();
     const listOfPresetNamesLower = listOfPresetNames.map((x) =>
@@ -5411,7 +5415,7 @@ async function VisualPDE(url) {
 
     // If newOptions specifies a parent, first load the options of the parent.
     if (newOptions.hasOwnProperty("parent") && newOptions.parent != null) {
-      loadOptions(newOptions.parent);
+      loadOptions({ preset: newOptions.parent });
     }
 
     // Reset the kinetic parameters.
@@ -5431,8 +5435,13 @@ async function VisualPDE(url) {
 
     // Set custom species names and reaction names.
     setCustomNames(overrideIsLoading);
-    // Trim speciesNames such that there are only numSpecies names.
-    options.speciesNames = speciesNamesToString();
+    if (!isInitialLoad) {
+      // When doing the initial loading, just keep the species names as-is without doing any pruning.
+      // This prevents "u v w q" becoming "u v" on loading the default.
+      // Otherwise, trim speciesNames to match numSpecies.
+      options.speciesNames = speciesNamesToString();
+      setCustomNames(overrideIsLoading);
+    }
     // Ensure that the correct play/pause button is showing.
     isRunning ? playSim() : pauseSim();
 
@@ -8567,6 +8576,7 @@ async function VisualPDE(url) {
   }
 
   function speciesNamesToString() {
+    // Prune and return the species names as a string.
     return listOfSpecies.slice(0, options.numSpecies).join(" ");
   }
 

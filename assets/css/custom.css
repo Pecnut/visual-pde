@@ -199,7 +199,7 @@ main a[href*="visualpde.com/sim/" i] {
   color: var(--play-button-color);
   transition: 0.5s cubic-bezier(0.33, 1, 0.68, 1);
   white-space: nowrap;
-  text-decoration: none;
+  text-decoration: none !important;
 }
 
 .nav-button-survey,

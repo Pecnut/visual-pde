@@ -1286,6 +1286,8 @@ async function VisualPDE(url) {
         let val = removeExtraWhitespace(this.value.trim());
         options.simTitle = val;
         this.value = val;
+        setDocTitle(val);
+        clearTimeout(titleBlurTimer);
       });
 
     // Listen for resize events.
@@ -5514,6 +5516,7 @@ async function VisualPDE(url) {
     $("#simTitle").val(
       options.simTitle ? options.simTitle : "Interactive simulation",
     );
+    setDocTitle($("#simTitle").val());
 
     // If Ghost nodes are specified in any comboStr, set showGhostBCs to true.
     if (checkGhostBCs()) {
@@ -11668,5 +11671,11 @@ async function VisualPDE(url) {
     autoPauseStopValue = evaluateParamVals([
       ["autoPauseStopVal", String(options.autoPauseAt)],
     ]);
+  }
+
+  function setDocTitle(val) {
+    document.title = val
+      ? val.trim() + " | VisualPDE"
+      : "Simulation | VisualPDE";
   }
 }

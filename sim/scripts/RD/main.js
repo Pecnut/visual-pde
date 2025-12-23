@@ -11674,8 +11674,10 @@ async function VisualPDE(url) {
   }
 
   function setDocTitle(val) {
-    document.title = val
-      ? val.trim() + " | VisualPDE"
-      : "Simulation | VisualPDE";
+    let str = "VisualPDE Simulation";
+    if (val?.trim()) {
+      str = `${val.trim()} | ${str}`;
+    }
+    document.title = str;
   }
 }

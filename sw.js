@@ -57,7 +57,6 @@ const cacheUrls = [
   "/sim/images/qr-code-home.webp",
   "/sim/images/qr-code.png",
   "/sim/images/qr-code.webp",
-  "/sim/images/river.png",
   "/sim/images/shell_square.png",
   "/sim/images/shell_square.webp",
   "/sim/images/smb.png",

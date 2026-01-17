@@ -70,6 +70,8 @@ function presetMap() {
     initCond_3: "cW",
     initCond_4: "cQ",
     colourbar: "cb",
+    colourbarMaxStr: "cM",
+    colourbarMinStr: "cm",
     colourmap: "c",
     comboStr_1: "csU",
     comboStr_2: "csV",

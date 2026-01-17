@@ -3303,17 +3303,38 @@ presets["dynamicalSystemsVisualisationTopography"] = {
   whatToPlot: "c",
 };
 
+presets["bacteriaInAReach2DIllustrated"] = {
+  blendImagePath: "./images/river_illustrated.webp",
+  colourbarMaxStr: "Great",
+  colourbarMinStr: "Poor",
+  flippedColourmap: false,
+  imagePathOne: "./images/river_illustrated.webp",
+  kineticParams:
+    "c0 = 0.5 in [0, 1];c1 = 0 in [0, 1];k = 0.006 in [0, 0.05];u = 1 in [0.1, 4];",
+  parent: "bacteriaInAReach2D",
+  preset: "bacteriaInAReach2DIllustrated",
+  reactionStr_1:
+    "-u*C_xb/sqrt(1 + 0.11*0.93*2*pi*L_y/L_x*cos(0.93*2*pi*x/L_x + 1.01)^2) + u*C_y*0.11*0.93*2*pi*L_y/L_x*cos(0.93*2*pi*x/L_x + 1.01)/sqrt(1 + 0.11*0.93*2*pi*L_y/L_x*cos(0.93*2*pi*x/L_x + 1.01)^2) - k*C + (1-c0)*0.1*Bump(0.1*L_x,0.365*L_y,L/20)/u + c1*0.1*Bump(0.64*L_x,0.68*L_y,0.1*L)/u",
+  maxColourValue: "1",
+  views: [
+    {
+      name: "Water quality",
+    },
+  ],
+  whatToPlot: "1-C",
+};
+
 presets["bacteriaInAReach2D"] = {
   blendImage: true,
-  blendImagePath: "./images/river.png",
+  blendImagePath: "./images/river_illustrated.webp",
   boundaryConditions_1: "neumann",
   brushType: "circle",
   diffusionStr_1_1: "2",
   diffusionStr_3_3: "0",
   dimension: "2",
-  domainIndicatorFun: "I_S==0",
+  domainIndicatorFun: "I_SA==0",
   domainViaIndicatorFun: true,
-  imagePathOne: "./images/river.png",
+  imagePathOne: "./images/river_illustrated.webp",
   kineticParams:
     "c0 = 0.5 in [0, 1];c1 = 0 in [0, 1];k = 0.006 in [0, 0.05];u = 1 in [0.1, 4];",
   maxColourValue: "5",
@@ -3340,7 +3361,7 @@ presets["bacteriaInAReach"] = {
   brushAction: "smoothadd",
   brushRadius: "20",
   brushType: "vline",
-  brushValue: "min(1, max(0,5-C))",
+  brushValue: "min(1, max(0,1-C))",
   colourbar: true,
   colourmap: "redGreen",
   comboStr_1: "Left: Dirichlet = c0; Right: Ghost = 0;",
@@ -7101,6 +7122,8 @@ presets["waveEquation"] = {
   boundaryConditions_2: "neumann",
   dt: 0.002,
   kineticParams: "D=1 in [1,100]; C=0.01",
+  maxColourValue: "0.5",
+  minColourValue: "-0.5",
   preset: "waveEquation",
   reactionStr_1: "v",
   reactionStr_2: "0",
@@ -7567,7 +7590,7 @@ presets["default"] = {
   arrowX: "L_x/2 - x",
   arrowY: "L_y/2 - y",
   autoPause: false,
-  autoPauseAt: 10,
+  autoPauseAt: "10",
   autoSetColourRange: false,
   backgroundColour: 0xffffff,
   blendImage: false,
@@ -7588,6 +7611,8 @@ presets["default"] = {
   captureWebcam: false,
   captureWebcamDelay: 100,
   colourbar: false,
+  colourbarMaxStr: "",
+  colourbarMinStr: "",
   colourmap: "turbo",
   comboStr_1: "",
   comboStr_2: "",

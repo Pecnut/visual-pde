@@ -62,7 +62,7 @@ We can track a range of quantities from the simulation over time in a separate c
 1. see how quickly the bacteria are flushed out of the river, and how this changes with flow speed,
 1. talk about the source apportionment problem. For instance: *we could have two side-by-side simulations with sources at different points upstream. They each generate downstream graphs, which would turn out to be the same but shifted in time. The big question to highlight here is how can we tell where the bacteria came from? It's not clear how to do this using industry-standard sensors, so we are investing in research towards high-tech measurement devices that can take into account chemical markers to identify different sources, for instance.*
 
-<iframe class="sim" id="simE" src="/sim/?preset=bacteriaInAReachOscillatoryDecay&story&lite&sf=1&clean&probing=true" frameborder="0" loading="lazy"></iframe><vpde-chart iframe="simE" ymin="0" ymax="0.7" ylabel="Outlet"> </vpde-chart><p style="display:none"><vpde-slider
+<iframe class="sim" id="simE" src="/sim/?preset=bacteriaInAReachOscillatoryDecay&story&lite&sf=1&clean&probing=true&iframeID=simE" frameborder="0" loading="lazy"></iframe><vpde-chart iframe="simE" ymin="0" ymax="0.7" ylabel="Outlet"> </vpde-chart><p style="display:none"><vpde-slider
     iframe="simE"
     name="u"
     label="Flow"

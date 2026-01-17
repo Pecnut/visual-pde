@@ -443,6 +443,11 @@ async function VisualPDE(url) {
     (url ? url.split("?")[1] : window.location.search).replaceAll("&amp;", "&"),
   );
 
+  if (params.has("iframeID")) {
+    // If an iframe ID is specified, save it for later.
+    localOpts.id = params.get("iframeID");
+  }
+
   if (params.has("no_ui")) {
     // Hide all the ui, including buttons.
     $(".ui").addClass("hidden");
@@ -2120,7 +2125,8 @@ async function VisualPDE(url) {
       .add(options, "autoPauseAt")
       .name("Pause at $t=$")
       .onFinishChange(function () {
-        canAutoPause = uniforms.t.value < options.autoPauseAt;
+        setAutoPauseStopValue();
+        canAutoPause = uniforms.t.value < autoPauseStopValue;
         controllers["autoPauseAt"].domElement.blur();
       });
 
@@ -2946,6 +2952,20 @@ async function VisualPDE(url) {
       });
 
     root.add(options, "guiUpdatePeriod").name("GUI update period)");
+
+    root
+      .add(options, "colourbarMaxStr")
+      .name("Cbar max label")
+      .onFinishChange(function () {
+        updateColourbarLims();
+      });
+
+    root
+      .add(options, "colourbarMinStr")
+      .name("Cbar min label")
+      .onFinishChange(function () {
+        updateColourbarLims();
+      });
 
     // Add a title to the rightGUI.
     const settingsTitle = document.createElement("div");
@@ -3814,7 +3834,7 @@ async function VisualPDE(url) {
         if (
           options.autoPause &&
           canAutoPause &&
-          uniforms.t.value >= options.autoPauseAt
+          uniforms.t.value >= autoPauseStopValue
         ) {
           // Pause automatically if this option is selected and we're past the set time, but only once.
           canAutoPause = false;
@@ -7680,6 +7700,12 @@ async function VisualPDE(url) {
       const regex = /[1-9]/;
       if (!regex.test(minStr)) minStr = "0";
       if (!regex.test(maxStr)) maxStr = "0";
+      if (options.colourbarMinStr.trim() != "") {
+        minStr = options.colourbarMinStr;
+      }
+      if (options.colourbarMaxStr.trim() != "") {
+        maxStr = options.colourbarMaxStr;
+      }
       $("#minLabel").html(minStr);
       $("#maxLabel").html(maxStr);
     }
@@ -8242,6 +8268,7 @@ async function VisualPDE(url) {
       encounteredError |= errorFlag;
     }
     if (cLimsDependOnParams) setColourRangeFromDef();
+    setAutoPauseStopValue();
     return addingNewUniform && !encounteredError;
   }
 
@@ -8410,24 +8437,18 @@ async function VisualPDE(url) {
     // Using the parameter values in kineticParamsVals, evaluate expressions for min and max colours.
     let min = options.minColourValue.toString();
     let max = options.maxColourValue.toString();
-    let regex;
-    for (const nameVal of kineticParamsVals) {
-      regex = new RegExp("\\b" + nameVal[0] + "\\b", "g");
-      min = min.replaceAll(regex, nameVal[1]);
-      max = max.replaceAll(regex, nameVal[1]);
-    }
     try {
-      cLims[0] = parser.evaluate(min);
+      cLims[0] = evaluateWithParams(min);
     } catch (error) {
       throwError(
-        "Unable to evaluate the minimum colour limit. Please check the definition.",
+        `Unable to evaluate ${min}. Please check the definition of the minimum colour limit.`,
       );
     }
     try {
-      cLims[1] = parser.evaluate(max);
+      cLims[1] = evaluateWithParams(max);
     } catch (error) {
       throwError(
-        "Unable to evaluate the maximum colour limit. Please check the definition.",
+        `Unable to evaluate ${max}. Please check the definition of the maximum colour limit.`,
       );
     }
     return cLims;
@@ -11668,9 +11689,27 @@ async function VisualPDE(url) {
   }
 
   function setAutoPauseStopValue() {
-    autoPauseStopValue = evaluateParamVals([
-      ["autoPauseStopVal", String(options.autoPauseAt)],
-    ]);
+    try {
+      autoPauseStopValue = evaluateWithParams(options.autoPauseAt);
+    } catch (error) {
+      throwError(
+        "Unable to evaluate " +
+          options.autoPauseAt +
+          ". Please check the definition of the auto-pause expression.",
+      );
+    }
+  }
+
+  // Evaluate a string with kinetic parameter substitutions.
+  // Errors should be caught by the caller.
+  function evaluateWithParams(str) {
+    let regex;
+    str = String(str);
+    for (const nameVal of kineticParamsVals) {
+      regex = new RegExp("\\b" + nameVal[0] + "\\b", "g");
+      str = str.replaceAll(regex, "(" + nameVal[1] + ")");
+    }
+    return parser.evaluate(str);
   }
 
   function setDocTitle(val) {

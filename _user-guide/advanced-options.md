@@ -21,6 +21,8 @@ onSubmit="page_search(document.getElementById('pageSearchInput').value); return 
       value=""
       placeholder="Search this page"
       autocomplete="off"
+      autocorrect="off"
+      spellcheck="false"
       onfocus="document.getElementById('pageSearchForm').onsubmit();window.gtag?.('event', 'page_search');"
       oninput="document.getElementById('pageSearchForm').onsubmit();"
       />

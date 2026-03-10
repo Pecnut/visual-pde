@@ -5440,7 +5440,7 @@ async function VisualPDE(url) {
 
     // If newOptions specifies a parent, first load the options of the parent.
     if (newOptions.hasOwnProperty("parent") && newOptions.parent != null) {
-      loadOptions({ preset: newOptions.parent });
+      loadOptions({ preset: newOptions.parent, isInitialLoad: true });
     }
 
     // Reset the kinetic parameters.

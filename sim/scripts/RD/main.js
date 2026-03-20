@@ -7295,10 +7295,9 @@ async function VisualPDE(url) {
     function createSlider() {
       const hasChanged = controller.lastString != kineticParamsStrs[label];
       if (!hasChanged) return;
+      controller.lastString = kineticParamsStrs[label];
       // Remove any existing sliders is anything has changed.
       if (controller.hasOwnProperty("slider")) {
-        // Check if the slider has changed.
-        let hasChanged = controller.lastString != kineticParamsStrs[label];
         // Remove any existing sliders.
         controller.slider.remove();
         delete controller.slider;

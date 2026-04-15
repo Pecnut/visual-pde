@@ -7,7 +7,7 @@ extract: Reaction–diffusion patterning on expanding domains
 equation: $\pd{u}{t}=\nabla^2 u+u^2v - (a+b)u,$ $\pd{v}{t}=D\nabla^2v -u^2v + a(1 - v)$
 categories: [patterns, parabolic]
 ---
-We consider the [Gray-Scott](/nonlinear-physics/gray-scott) system on apically growing domains (i.e. ones where the growth is localised to the bundary). For an overview of some of the dynamics in such systems, and an introduction to the literature, see this SIAM [dynamical systems gallery](https://dsweb.siam.org/Media-Gallery/pattern-formation-on-evolving-domains).
+We consider the [Gray-Scott](/nonlinear-physics/gray-scott) system on uniformly growing domains. For an overview of some of the dynamics in such systems, and an introduction to the literature, see this SIAM [dynamical systems gallery](https://dsweb.siam.org/Media-Gallery/pattern-formation-on-evolving-domains).
 
 
 * Check out this [interactive simulation on a linearly growing domain](/sim/?preset=KymographLinearGrowth). By default, the simulation shows a kymograph or space-time plot of the solution $u$ in time and space. You can press {{ layout.views }} to change instead to a 1D plot of the density of $u$ as a function of $x$.

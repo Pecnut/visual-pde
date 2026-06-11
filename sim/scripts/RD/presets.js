@@ -416,7 +416,7 @@ presets["Superlattice"] = {
   initCond_3: "3",
   initCond_4: "10",
   kineticParams:
-    "a = 3;b = 9;c = 15;d = 9;alpha = 0.15;D_uone = 4.3;D_utwo = 50;D_uthree = 22;D_ufour = 660;",
+    "a = 3;b = 9;c = 15;d = 9;alpha = 0.15;D_u1 = 4.3;D_u2 = 50;D_u3 = 22;D_u4 = 660;",
   maxColourValue: "9.37",
   minColourValue: "0.35",
   numSpecies: 4,

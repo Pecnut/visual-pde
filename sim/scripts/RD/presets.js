@@ -2,6 +2,27 @@
 
 let presets = {};
 
+presets["FitzHugh-NagumoSpirals"] = {
+	"brushRadius": "14",
+	"diffusionStr_2_2": "epsilon^2",
+	"domainScale": "400",
+	"dt": 0.005,
+	"initCond_1": "cos(x/10)*cos(y/10)+RANDN",
+	"initCond_2": "RANDN",
+	"kineticParams": "epsilon = 0.06;a = 0.5;b = 0.6;",
+	"maxColourValue": "2",
+	"minColourValue": "-2",
+	"numSpecies": 2,
+	"parent": "FitzHugh-Nagumo",
+	"preset": "FitzHugh-NagumoSpirals",
+	"probeFun": "u",
+	"probeLength": 30,
+	"reactionStr_1": "u-u^3/3-v",
+	"reactionStr_2": "epsilon*(u+a-b*v)",
+	"speciesNames": "u v",
+};
+
+
 presets["bistableSurvivalDumbbell"] = {
   brushRadius: "1",
   colourbar: true,

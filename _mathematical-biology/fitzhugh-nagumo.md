@@ -19,6 +19,8 @@ where we take $D>1$.
 
 * This system has many different kinds of solutions which are stable over long time periods. To see this, change the initial condition, under <span class='click_sequence'>{{ layout.equations }} → **Initial conditions**</span> so that $u\|_{t=0}$ has the value '**RAND**'.  Then press {{ layout.restart }} to restart the simulation. It should now exhibit patterns which are much more spot-like.
 
+* Another fun behaviour can be seen in [this spiral wave simulation](/sim/?preset=FitzHugh-NagumoSpirals).
+
 # Turing–Hopf bifurcations
 
 We now vary the parameters from the previous simulation so that it supports both pattern formation, but also oscillations. These oscillations come from steady states undergoing [Hopf bifurcations](https://en.wikipedia.org/wiki/Hopf_bifurcation). In such regimes, one can often find a range of complex spatial, temporal, and spatiotemporal behaviours, many of which can be simultaneously stable for different initial conditions. 

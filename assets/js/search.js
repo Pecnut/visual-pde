@@ -175,10 +175,21 @@ function site_search(term) {
           str +
           "^1000 tags:" +
           str +
-          " extract:" +
-          str;
+          "^100 extract:" +
+          str +
+					"^10 ";
       });
-    var results = siteIndex.search(searchterm);
+		var results = siteIndex.search(searchterm); // no body
+		// if few results, search again but include the body field
+		if (results.length < 5) {
+		  var bodySearchterm = searchterm;
+		  term.split(" ").filter(Boolean).forEach((str) => {
+		    bodySearchterm += "body:" + str + "* ";
+		  });
+		  var bodyResults = siteIndex.search(bodySearchterm);
+		  var seen = new Set(results.map(r => r.ref));
+		  results = results.concat(bodyResults.filter(r => !seen.has(r.ref)));
+		}
 
     if (results.length > 0) {
       for (var i = 0; i < Math.min(results.length, 20); i++) {

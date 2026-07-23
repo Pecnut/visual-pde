@@ -488,6 +488,14 @@ VisualPDE supports checkpoints, which allow you to save the state of a simulatio
 
   The degree to which the blend image should be blended into the simulation view. 0 corresponds to no blending.
 
+  #### To integrate
+
+  The expression to be integrated over the domain at each timestep, available in equation right-hand-sides as the variable `GlobalInt`. This can be a function of space ($x$, $y$), time ($t$), any user-defined parameters, any of the unknowns ($u$, $v$, $w$, $q$) and their first derivatives, the size of the domain ($L$, $L_x$, $L_y$) and the images ($I_S$, $I_T$). See our discussion of [valid expressions](#writing-valid-expressions) for valid syntax and a list of available in-built functions.
+
+  #### Update period (global integral)
+
+  The number of timesteps between updates of the global integral. Lower numbers result in more frequent updates, but may slow down the simulation. Must be an integer greater than 0.
+
 - #### Dev
 
   Tools intended for the development and benchmarking of VisualPDE.

@@ -19,7 +19,7 @@ where we take $D>1$.
 
 * This system has many different kinds of solutions which are stable over long time periods. To see this, change the initial condition, under <span class='click_sequence'>{{ layout.equations }} → **Initial conditions**</span> so that $u\|_{t=0}$ has the value '**RAND**'.  Then press {{ layout.restart }} to restart the simulation. It should now exhibit patterns which are much more spot-like.
 
-* Another fun behaviour can be seen in [this spiral wave simulation](/sim/?preset=FitzHugh-NagumoSpirals).
+* Another fascinating behaviour is the occurence of [spiral waves in this simulation](/sim/?preset=FitzHugh-Nagumo-Spirals) which form naturally from random initial data.
 
 # Turing–Hopf bifurcations
 

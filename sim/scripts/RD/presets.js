@@ -2,24 +2,48 @@
 
 let presets = {};
 
-presets["FitzHugh-NagumoSpirals"] = {
+presets["FitzHugh-Nagumo-Spirals"] = {
   brushRadius: "14",
   diffusionStr_2_2: "epsilon^2",
   domainScale: "400",
-  dt: 0.005,
-  initCond_1: "cos(x/10)*cos(y/10)+RANDN",
+  dt: 0.01,
+  initCond_1: "3*(cos(x/10)*cos(y/10)+RANDN)",
   initCond_2: "RANDN",
-  kineticParams: "epsilon = 0.06;a = 0.5;b = 0.6;",
+  kineticParams: "epsilon = 0.02;a = 0.5;b = 0.6;",
   maxColourValue: "2",
   minColourValue: "-2",
   numSpecies: 2,
   parent: "FitzHugh-Nagumo",
-  preset: "FitzHugh-NagumoSpirals",
+  preset: "FitzHugh-Nagumo-Spirals",
   probeFun: "u",
   probeLength: 30,
   reactionStr_1: "u-u^3/3-v",
   reactionStr_2: "epsilon*(u+a-b*v)",
   speciesNames: "u v",
+};
+
+presets["wavesGeometryOscillatingSponge"] = {
+  boundaryConditions_2: "neumann",
+  comboStr_1:
+    "Bottom: Neumann = 0; Left: Neumann = 0; Right: Dirichlet = sin(t); Top: Neumann = 0;",
+  crossDiffusion: true,
+  diffusionStr_1_1: "C*D",
+  diffusionStr_2_1: "D",
+  diffusionStr_2_2: "0",
+  diffusionStr_3_3: "0",
+  domainScale: "150",
+  dt: 0.002,
+  initCond_1: "0",
+  kineticParams: "D = 1 in [1, 100];C = 0.002;W = 2;omega=3;A = 1.5;c = 0.8;",
+  maxColourValue: "1",
+  minColourValue: "-1",
+  parent: "wavesAddedGeometry",
+  preset: "wavesGeometryOscillatingSponge",
+  reactionStr_1: "v-c*H(-0.4*L_x-x)*u",
+  reactionStr_2: "A*H(x-0.49*L_x)*sin(t)",
+  reactionStr_3: "0",
+  spatialStep: "0.15",
+  simTitle: "Wave equation",
 };
 
 presets["bistableSurvivalDumbbell"] = {
@@ -4379,7 +4403,7 @@ presets["RedGreyInvasionUK"] = {
   imagePathTwo: "./images/gb.webp",
   initCond_1: "1",
   initCond_2: "1/cosh(0.5*sqrt((x-L_x/10)^2+(y+0.8*L_y/2)^2))^2",
-  kineticParams: "c_RR = 1;c_GG = 1;c_RG = 1;c_GR = 0.9;",
+  kineticParams: "c_RR = 1;c_GG = 1;c_RG = 1.2;c_GR = 0.9;",
   maxColourValue: "0.5",
   minColourValue: "0",
   minX: "-L_x/2",
@@ -7758,6 +7782,8 @@ presets["default"] = {
   flippedColourmap: false,
   forceManualInterpolation: false,
   forceTryClickingPopup: false,
+  globalIntegralFun: "0",
+  globalIntegralUpdatePeriod: 10,
   guiUpdatePeriod: 2,
   imagePathOne: "./images/Sofya.webp",
   imagePathTwo: "./images/Alan.webp",
@@ -7917,6 +7943,7 @@ export function getUserTextFields() {
     "dirichletStr_3",
     "dirichletStr_4",
     "domainIndicatorFun",
+    "globalIntegralFun",
     "overlayExpr",
     "probeFun",
     "probeX",

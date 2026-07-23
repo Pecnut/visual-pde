@@ -45,4 +45,6 @@ We can also add boundaries for waves to interact with by creating internal bound
 
 * Load this [interactive simulation with internal boundaries](/sim/?preset=wavesAddedGeometry).
 
-* Click to paint a small circular obstruction which will deflect the initial wave; dragging across the screen allows you to remove larger parts of the domain. 
+* Click to paint a small circular obstruction which will deflect the initial wave; dragging across the screen allows you to remove larger parts of the domain.
+
+* [This interactive simulation with oscillating waves](/sim/?preset=wavesGeometryOscillatingSponge) is a similar setup, but with waves generated on the right, and a sponge layer absorbing them on the left.

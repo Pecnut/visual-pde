@@ -197,6 +197,28 @@ export function minMaxShader() {
     }`;
 }
 
+export function sumShader() {
+  return `varying vec2 textureCoords; 
+    uniform sampler2D textureSource;
+    uniform vec2 srcResolution;
+
+    void main()
+    {
+      // Sum the nearby pixels in the texture source.
+      ivec2 outTexel = ivec2(gl_FragCoord.xy);
+      float sumVal = 0.0;
+      for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 2; ++x) {
+          ivec2 srcTexel = outTexel * 2 + ivec2(x, y);
+          if (srcTexel.x < int(srcResolution.x) && srcTexel.y < int(srcResolution.y)) {
+            sumVal += texture2D(textureSource, (vec2(srcTexel) + 0.5) / srcResolution).r;
+          }
+        }
+      }
+      gl_FragColor = vec4(sumVal, 0.0, 0.0, 0.0);
+    }`;
+}
+
 export function probeShader() {
   return `varying vec2 textureCoords;
     uniform sampler2D textureSource;
@@ -277,6 +299,5 @@ export function probeShader() {
 
       // Compute the probe value.
       gl_FragColor = vec4(PROBE_FUN, 0.0, x, y);
-      gl_FragColor.g = float(float(indicatorFun) <= 0.0);
     }`;
 }

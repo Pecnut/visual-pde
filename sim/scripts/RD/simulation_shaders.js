@@ -52,6 +52,7 @@ export function RDShaderTop(type) {
     uniform float L_min;
     uniform float t;
     uniform float seed;
+    uniform float globalIntegralValue;
     uniform sampler2D imageSourceOne;
     uniform sampler2D imageSourceTwo;
 
@@ -800,4 +801,93 @@ export function clampSpeciesToEdgeShader(direction) {
     }`;
   }
   return out;
+}
+
+export function globalIntegralShader() {
+  return `varying vec2 textureCoords;
+    uniform sampler2D textureSource;
+    uniform float dx;
+    uniform float dy;
+    uniform float L;
+    uniform float L_x;
+    uniform float L_y;
+    uniform float L_min;
+    uniform float t;
+    uniform bool customSurface;
+    uniform bool vectorField;
+    uniform bool overlayLine;
+    uniform sampler2D imageSourceOne;
+    uniform sampler2D imageSourceTwo;
+
+    AUXILIARY_GLSL_FUNS
+
+    const float ALPHA = 0.147;
+    const float INV_ALPHA = 1.0 / ALPHA;
+    const float BETA = 2.0 / (pi * ALPHA);
+    float erfinv(float pERF) {
+      float yERF;
+      if (pERF == -1.0) {
+        yERF = log(1.0 - (-0.99)*(-0.99));
+      } else {
+        yERF = log(1.0 - pERF*pERF);
+      }
+      float zERF = BETA + 0.5 * yERF;
+      return sqrt(sqrt(zERF*zERF - yERF * INV_ALPHA) - zERF) * sign(pERF);
+    }
+
+    void main()
+    {
+      ivec2 texSize = textureSize(textureSource,0);
+      float step_x = 1.0 / float(texSize.x);
+      float step_y = 1.0 / float(texSize.y);
+      float x = MINX + textureCoords.x * L_x;
+      float y = MINY + textureCoords.y * L_y;
+
+      vec4 uvwq = texture2D(textureSource, textureCoords);
+      vec4 uvwqL = texture2D(textureSource, textureCoords + vec2(-step_x, 0.0));
+      vec4 uvwqR = texture2D(textureSource, textureCoords + vec2(+step_x, 0.0));
+      vec4 uvwqT = texture2D(textureSource, textureCoords + vec2(0.0, +step_y));
+      vec4 uvwqB = texture2D(textureSource, textureCoords + vec2(0.0, -step_y));
+
+      vec4 uvwqX = (uvwqR - uvwqL) / (2.0*dx);
+      vec4 uvwqY = (uvwqT - uvwqB) / (2.0*dy);
+      vec4 uvwqXF = (uvwqR - uvwq) / dx;
+      vec4 uvwqYF = (uvwqT - uvwq) / dy;
+      vec4 uvwqXB = (uvwq - uvwqL) / dx;
+      vec4 uvwqYB = (uvwq - uvwqB) / dy;
+      vec4 uvwqXX = (uvwqR - 2.0*uvwq + uvwqL) / (dx * dx);
+      vec4 uvwqYY = (uvwqT - 2.0*uvwq + uvwqB) / (dy * dy);
+
+      // At boundaries, compute gradients using one-sided differences.
+      if (textureCoords.x - step_x < 0.0) {
+        uvwqX = (uvwqR - uvwq) / dx;
+        uvwqXF = uvwqX;
+        uvwqXB = uvwqX;
+      }
+
+      if (textureCoords.x + step_x > 1.0) {
+        uvwqX = (uvwq - uvwqL) / dx;
+        uvwqXF = uvwqX;
+        uvwqXB = uvwqX;
+      }
+
+      if (textureCoords.y - step_y < 0.0) {
+        uvwqY = (uvwqT - uvwq) / dy;
+        uvwqYF = uvwqY;
+        uvwqYB = uvwqY;
+      }
+
+      if (textureCoords.y + step_y > 1.0) {
+        uvwqY = (uvwq - uvwqB) / dy;
+        uvwqYF = uvwqY;
+        uvwqYB = uvwqY;
+      }
+
+      float value = GLOBAL_INTEGRAL_FUN;
+      if (isnan(value)) {
+        value = 1.0/0.0;
+      }
+      float in_domain = float(float(indicatorFun) > 0.0);
+      gl_FragColor = vec4(value * in_domain, 0.0, 0.0, 0.0);
+    }`;
 }

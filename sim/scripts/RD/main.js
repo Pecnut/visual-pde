@@ -25,6 +25,7 @@ import {
   postShaderDomainIndicatorVField,
   interpolationShader,
   minMaxShader,
+  sumShader,
   probeShader,
 } from "./post_shaders.js";
 import { copyShader } from "../copy_shader.js";
@@ -50,6 +51,7 @@ import {
   RDShaderGhostY,
   RDShaderMain,
   clampSpeciesToEdgeShader,
+  globalIntegralShader,
 } from "./simulation_shaders.js";
 import { randShader, randNShader } from "../rand_shader.js";
 import {
@@ -112,7 +114,7 @@ async function VisualPDE(url) {
     probeTexture,
     clickTexture,
     simTextureOpts,
-    minMaxTextures = [],
+    reductionTextures = [],
     checkpointTexture;
   let displayMaterial,
     drawMaterial,
@@ -124,12 +126,14 @@ async function VisualPDE(url) {
     copyMaterial,
     postMaterial,
     probeMaterial,
+    globalIntegralMaterial,
     lineMaterial,
     overlayLineMaterial,
     arrowMaterial,
     interpolationMaterial,
     checkpointMaterial,
     minMaxMaterial,
+    sumMaterial,
     tailGeometry,
     headGeometry;
   let domain, simDomain, line, overlayLine;
@@ -187,6 +191,7 @@ async function VisualPDE(url) {
     isStory = false,
     wasLinePlot = false,
     shaderContainsRAND = false,
+    shaderContainsGlobalIntegral = false,
     anyDirichletBCs,
     dataNudgedUp = false,
     probeNudgedUp = false,
@@ -203,6 +208,7 @@ async function VisualPDE(url) {
     checkpointExists = false,
     nextViewNumber = 0,
     frameCount = 0,
+    timestepCount = 0,
     lastFPS,
     rate,
     lastT,
@@ -288,6 +294,7 @@ async function VisualPDE(url) {
     ...getDefaultTeXLabelsBCsICs(),
     ...getDefaultTeXLabelsTimescales(),
   };
+  let globalIntegralFunTexStr = "";
   let listOfSpecies, listOfReactions, anySpeciesRegexStrs;
   const fieldsInView = getFieldsInView();
 
@@ -1133,6 +1140,11 @@ async function VisualPDE(url) {
       uniforms: uniforms,
       vertexShader: genericVertexShader(),
     });
+    // This material allows for the computation of a global integral quantity.
+    globalIntegralMaterial = new THREE.ShaderMaterial({
+      uniforms: uniforms,
+      vertexShader: genericVertexShader(),
+    });
     clearColour = new THREE.Color().setRGB(-1, -1, -1);
 
     // We'll use a host of materials for timestepping, each with different fragment shaders.
@@ -1193,6 +1205,11 @@ async function VisualPDE(url) {
       uniforms: minMaxUniforms,
       vertexShader: genericVertexShader(),
       fragmentShader: minMaxShader(),
+    });
+    sumMaterial = new THREE.ShaderMaterial({
+      uniforms: minMaxUniforms,
+      vertexShader: genericVertexShader(),
+      fragmentShader: sumShader(),
     });
 
     // Geometry for arrows.
@@ -1672,11 +1689,11 @@ async function VisualPDE(url) {
     postprocess();
 
     // Dispose of and create new minmax textures.
-    minMaxTextures.forEach((tex) => tex.dispose());
-    minMaxTextures = [];
+    reductionTextures.forEach((tex) => tex.dispose());
+    reductionTextures = [];
     let w = nXDisc + shift,
       h = nYDisc + shift;
-    const minmaxTextureOpts = {
+    const reductionTextureOpts = {
       format: THREE.RGBAFormat,
       type: THREE.FloatType,
       minFilter: THREE.NearestFilter,
@@ -1684,11 +1701,13 @@ async function VisualPDE(url) {
       wrapS: THREE.ClampToEdgeWrapping,
       wrapT: THREE.ClampToEdgeWrapping,
     };
-    // Create a number of minmax textures, each half the size of the previous.
+    // Create a number of reduction textures, each half the size of the previous.
     while (w > 1 || h > 1) {
       w = Math.max(1, Math.ceil(w / 2));
       h = Math.max(1, Math.ceil(h / 2));
-      minMaxTextures.push(new THREE.WebGLRenderTarget(w, h, minmaxTextureOpts));
+      reductionTextures.push(
+        new THREE.WebGLRenderTarget(w, h, reductionTextureOpts),
+      );
     }
 
     // The interpolationTexture will match the number of pixels in the display.
@@ -1772,6 +1791,9 @@ async function VisualPDE(url) {
       },
       embossLightDir: {
         type: "vec3",
+      },
+      globalIntegralValue: {
+        type: "f",
       },
       L: {
         type: "f",
@@ -2075,6 +2097,7 @@ async function VisualPDE(url) {
         configureOptions();
         configureGUI();
         setRDEquations();
+        setGlobalIntegralShader();
         setPostFunFragShader();
         setProbeShader();
         renderIfNotRunning();
@@ -2884,6 +2907,17 @@ async function VisualPDE(url) {
       .onFinishChange(function () {
         updateRandomSeed();
       });
+
+    controllers["globalIntegralFun"] = root
+      .add(options, "globalIntegralFun")
+      .name("To integrate")
+      .onFinishChange(function () {
+        updateGlobalIntegralFun();
+      });
+
+    controllers["globalIntegralUpdatePeriod"] = root
+      .add(options, "globalIntegralUpdatePeriod", 1, 1000, 1)
+      .name("Update period");
 
     devFolder = root.addFolder("Dev");
     root = devFolder;
@@ -3880,6 +3914,13 @@ async function VisualPDE(url) {
           break;
         }
         if (shaderContainsRAND && !options.setSeed) updateRandomSeed();
+        if (shaderContainsGlobalIntegral) {
+          timestepCount =
+            (timestepCount + 1) % options.globalIntegralUpdatePeriod;
+          if (!(timestepCount % options.globalIntegralUpdatePeriod)) {
+            updateGlobalIntegral();
+          }
+        }
         timestep();
         // Leave the loop after one timestep if we're in automata mode.
         if (options.automataMode) {
@@ -4552,10 +4593,15 @@ async function VisualPDE(url) {
     }
     updateRandomSeed();
     uniforms.t.value = 0.0;
+    timestepCount = 0;
+    frameCount = 0;
     canAutoPause = true;
     updateTimeDisplay();
     clearTextures();
     clearProbe();
+    if (shaderContainsGlobalIntegral) {
+      updateGlobalIntegral();
+    }
     render(true);
     // Reset time-tracking stats.
     lastT = uniforms.t.value;
@@ -4811,6 +4857,9 @@ async function VisualPDE(url) {
 
     // Insert MINX and MINY.
     str = replaceMINXMINY(str);
+
+    // Replace 'GlobalInt' with globalIntegralValue, which is a uniform that stores the integral of the quantity.
+    str = str.replaceAll(/\bGlobalInt\b/g, "globalIntegralValue");
 
     return str;
   }
@@ -5173,6 +5222,7 @@ async function VisualPDE(url) {
       middle = randNShader() + middle;
     }
     shaderContainsRAND = containsRAND || containsRANDN;
+    shaderContainsGlobalIntegral = /\bglobalIntegralValue\b/.test(middle);
     let bot = [dirichletShader, algebraicShader, RDShaderBot()].join(" ");
 
     let type = "FE";
@@ -5417,6 +5467,9 @@ async function VisualPDE(url) {
     // Set the camera.
     configureCameraAndClicks();
 
+    // Update the globalIntegralFunTexStr.
+    globalIntegralFunTexStr = parseStringToTEX(options.globalIntegralFun);
+
     // To get around an annoying bug in dat.GUI.image, in which the
     // controller doesn't update the value of the underlying property,
     // we'll destroy and create a new image controller everytime we load
@@ -5610,6 +5663,7 @@ async function VisualPDE(url) {
       options.dirichletStr_2,
       options.dirichletStr_3,
       options.dirichletStr_4,
+      options.globalIntegralFun,
       options.robinStr_1,
       options.robinStr_2,
       options.robinStr_3,
@@ -5884,6 +5938,29 @@ async function VisualPDE(url) {
     shaderStr = shaderStr.replace(/indicatorFun/g, replacement);
     assignFragmentShader(probeMaterial, shaderStr);
     probeMaterial.needsUpdate = true;
+  }
+
+  function setGlobalIntegralShader() {
+    // Insert any user-defined kinetic parameters, as uniforms.
+    let shaderStr = kineticUniformsForShader() + globalIntegralShader();
+    shaderStr = replaceMINXMINY(shaderStr);
+    shaderStr = shaderStr.replace(
+      /GLOBAL_INTEGRAL_FUN/g,
+      parseShaderString(options.globalIntegralFun),
+    );
+    let replacement = "1";
+    if (options.domainViaIndicatorFun) {
+      replacement = parseShaderString(getModifiedDomainIndicatorFun());
+    }
+    shaderStr = shaderStr.replace(/indicatorFun/g, replacement);
+    assignFragmentShader(globalIntegralMaterial, shaderStr);
+    globalIntegralMaterial.needsUpdate = true;
+  }
+
+  function updateGlobalIntegralFun() {
+    globalIntegralFunTexStr = parseShaderString(options.globalIntegralFun);
+    setGlobalIntegralShader();
+    setEquationDisplayType();
   }
 
   function loadImageSourceOne() {
@@ -7112,6 +7189,17 @@ async function VisualPDE(url) {
     // Replace Gauss with \mathcal{N}.
     str = str.replaceAll(/\bGauss\b/g, "\\mathcal{N}");
 
+    // Replace GlobalInt with \int_{\Omega}(options.globalIntegralFun).
+    let replacement = "";
+    if (options.dimension == 1) {
+      replacement =
+        "\\int_{\\Omega} " + options.globalIntegralFun + "\\, \\d x \\ ";
+    } else {
+      replacement =
+        "\\iint_{\\Omega} " + options.globalIntegralFun + "\\, \\d x \\d y\\ ";
+    }
+    str = str.replaceAll(/\bGlobalInt\b/g, replacement);
+
     // If there's an underscore, put {} around the word that follows it.
     str = str.replaceAll(/_(\w+\b)/g, "_{$1}");
 
@@ -7928,7 +8016,7 @@ async function VisualPDE(url) {
     minMaxUniforms.textureSource.value = postTexture.texture;
     minMaxUniforms.srcResolution.value = new THREE.Vector2(nXDisc, nYDisc);
     minMaxUniforms.firstFlag.value = true;
-    for (const curTex of minMaxTextures) {
+    for (const curTex of reductionTextures) {
       renderer.setRenderTarget(curTex);
       renderer.render(simDomain, simCamera);
       minMaxUniforms.textureSource.value = curTex.texture;
@@ -7941,7 +8029,7 @@ async function VisualPDE(url) {
     try {
       const smallBuffer = new Float32Array(4);
       renderer.readRenderTargetPixels(
-        minMaxTextures.slice(-1)[0],
+        reductionTextures.slice(-1)[0],
         0,
         0,
         1,
@@ -7954,6 +8042,39 @@ async function VisualPDE(url) {
         "Sadly, your configuration is not fully supported by VisualPDE. Some features may not work as expected, but we encourage you to try!",
       );
       return [0, 1];
+    }
+  }
+
+  function computeTextureSumGPU() {
+    // Get the sum of vals in postTexture, using a shader to compute this on the GPU.
+    simDomain.material = sumMaterial;
+    minMaxUniforms.textureSource.value = postTexture.texture;
+    minMaxUniforms.srcResolution.value = new THREE.Vector2(nXDisc, nYDisc);
+    for (const curTex of reductionTextures) {
+      renderer.setRenderTarget(curTex);
+      renderer.render(simDomain, simCamera);
+      minMaxUniforms.textureSource.value = curTex.texture;
+      minMaxUniforms.srcResolution.value = new THREE.Vector2(
+        curTex.width,
+        curTex.height,
+      );
+    }
+    try {
+      const smallBuffer = new Float32Array(4);
+      renderer.readRenderTargetPixels(
+        reductionTextures.slice(-1)[0],
+        0,
+        0,
+        1,
+        1,
+        smallBuffer,
+      );
+      return smallBuffer[0];
+    } catch {
+      alert(
+        "Sadly, your configuration is not fully supported by VisualPDE. Some features may not work as expected, but we encourage you to try!",
+      );
+      return 0;
     }
   }
 
@@ -8500,6 +8621,7 @@ async function VisualPDE(url) {
     setRDEquations();
     setClearShader();
     setProbeShader();
+    setGlobalIntegralShader();
     setBrushType();
     updateWhatToPlot();
     setDrawAndDisplayShaders();
@@ -10896,6 +11018,9 @@ async function VisualPDE(url) {
       return "0";
     }
 
+    // Replace all sorts of unicode minus signs, dashes, and hyphens with a regular minus sign.
+    str = str.replaceAll(/[\u2212\u2012\u2013\u2014]/g, "-");
+
     // Replace texture2D and vec2 with placeholders to prevent accidental multiplication.
     str = str.replaceAll(/\btexture2D\b/g, "__TEXTURETWOD__");
     str = str.replaceAll(/\bvec2\(/g, "__VECTWOPAREN__");
@@ -11761,5 +11886,19 @@ async function VisualPDE(url) {
       str = `${val.trim()} | ${str}`;
     }
     document.title = str;
+  }
+
+  function updateGlobalIntegral() {
+    simDomain.material = globalIntegralMaterial;
+    uniforms.textureSource.value = simTextures[1].texture;
+    renderer.setRenderTarget(postTexture);
+    renderer.render(simScene, simCamera);
+    let dA;
+    if (options.dimension == 1) {
+      dA = uniforms.dx.value;
+    } else if (options.dimension == 2) {
+      dA = uniforms.dx.value * uniforms.dy.value;
+    }
+    uniforms.globalIntegralValue.value = computeTextureSumGPU() * dA;
   }
 }

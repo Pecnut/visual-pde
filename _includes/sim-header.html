@@ -4,36 +4,36 @@
         {%- assign page_paths = site.header_pages | default: default_paths -%}
         {%- assign titles_size = site.pages | map: 'title' | join: '' | size -%}
         {% if site.title == "VisualPDE Canary" %}
-            <link rel="preload" as="image" href="/assets/images/2cheart-and-title-light.webp"/>
-            <link rel="preload" as="image" href="/assets/images/2cheart-and-title-dark.webp"/>
+            <link rel="preload" as="image" href="/assets/images/logo-canary-and-title-light.webp"/>
+            <link rel="preload" as="image" href="/assets/images/logo-canary-and-title-dark.webp"/>
         {% else %}
-            <link rel="preload" as="image" href="/assets/images/2heart-and-title-light.webp"/>
-            <link rel="preload" as="image" href="/assets/images/2heart-dark.webp"/>
+            <link rel="preload" as="image" href="/assets/images/logo-and-title-light.webp"/>
+            <link rel="preload" as="image" href="/assets/images/logo-and-title-dark.webp"/>
         {% endif %}
         <a class="site-title" rel="author" href="{{ "/" | relative_url }}">
             {% if site.title == "VisualPDE Canary" %}
             <img
                 class="light-mode-img"
-                src="/assets/images/2cheart-and-title-light.webp"
+                src="/assets/images/logo-canary-and-title-light.webp"
                 alt="VisualPDE and a heart-shaped logo"
             /><img
                 class="dark-mode-img"
-                src="/assets/images/2cheart-and-title-dark.webp"
+                src="/assets/images/logo-canary-and-title-dark.webp"
                 alt="VisualPDE and a heart-shaped logo"
             />
             {% else %}
                 <img
                     class="light-mode-img"
-                    src="/assets/images/2heart-and-title-light.webp"
+                    src="/assets/images/logo-and-title-light.webp"
                     alt="VisualPDE and a heart-shaped logo"
                 /><img
                     class="dark-mode-img"
-                    src="/assets/images/2heart-and-title-dark.webp"
+                    src="/assets/images/logo-and-title-dark.webp"
                     alt="VisualPDE and a heart-shaped logo"
                 />
             {% endif %}
         </a>
-            <div id='simTitle-divider'>⟫</div>
+            <div id='simTitle-divider'><i class="fa-solid fa-chevron-right"></i></div>
         <input id="simTitle" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck=false>
 
         {%- if titles_size > 0 -%}
@@ -48,7 +48,7 @@
             </label>
 
             <div class="trigger">
-                <a class="nav-button-survey" href="https://forms.office.com/Pages/ResponsePage.aspx?id=i9hQcmhLKUW-RNWaLYpvlJ_-2EYFaPNGns6KgINzIKlUM0MzSUI1RjVOSkdTTVRIVEFJS08ySVVJRS4u" target="_blank">Quick feedback?</a>
+                <!-- <a class="nav-button-survey" href="https://forms.office.com/Pages/ResponsePage.aspx?id=i9hQcmhLKUW-RNWaLYpvlJ_-2EYFaPNGns6KgINzIKlUM0MzSUI1RjVOSkdTTVRIVEFJS08ySVVJRS4u" target="_blank">Quick feedback?</a> -->
 
                 {%- for path in page_paths -%}
                 {%- assign my_page = site.pages | where: "path", path | first -%}

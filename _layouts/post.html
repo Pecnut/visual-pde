@@ -1,0 +1,35 @@
+---
+layout: default
+equations: <span class='ui_button_documentation' id="equations">&nbsp;</span>
+settings: <span class='ui_button_documentation'><i class="fa-solid fa-wrench"></i></span>
+views: <span class='ui_button_documentation'><i class="fa-solid fa-layer-group"></i></span>
+play: <span class='ui_button_documentation'><i class="fa-solid fa-play"></i></span>
+pause: <span class='ui_button_documentation'><i class="fa-solid fa-pause"></i></span>
+erase: <span class='ui_button_documentation'><i class="fa-solid fa-arrow-rotate-left"></i></span>
+restart: <span class='ui_button_documentation'><i class="fa-solid fa-arrow-rotate-left"></i></span>
+help: <span class='ui_button_documentation'><i class="fa-solid fa-circle-question"></i></span>
+share: <span class='ui_button_documentation'><i class="fa-solid fa-share-from-square"></i></span>
+screenshot: <span class='ui_button_documentation'><i class="fa-solid fa-camera"></i></span>
+link: <span class='ui_button_documentation'><i class="fa-solid fa-link"></i></span>
+stop_recording: <span class='ui_button_documentation' id="stop_recording"><i class="fa-solid fa-video-slash"></i></span>
+dark_mode_button: <span class='ui_button_documentation' id="dark-mode-button"><i class="fa-solid fa-moon"></i></span>
+light_mode_button: <span class='ui_button_documentation' id="light-mode-button"><i class="fa-solid fa-sun"></i></span>
+---
+<header class="news-post-header">
+	<a class="news-back-link" href="{{ '/news/' | relative_url }}">&larr; All news</a>
+	<h1>{{ page.title }}</h1>
+	<div class="post-byline">
+		{% if page.author %}
+			{% assign author_image = page.author %}
+			{% assign author_image_path = '/assets/images/' | append: author_image | append: '.webp' %}
+			{% assign author_image_file = site.static_files | where: 'path', author_image_path | first %}
+			{% if author_image_file %}
+				<img class="post-author-image" src="{{ author_image_path | relative_url }}" alt="Portrait of {{ page.author }}">
+			{% endif %}
+			<span>By {{ page.author }}</span>
+		{% endif %}
+		<time datetime="{{ page.date | date_to_xmlschema }}">{{ page.date | date: "%d %B %Y" }}</time>
+	</div>
+</header>
+
+{{ content }}

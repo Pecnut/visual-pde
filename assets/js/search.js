@@ -149,20 +149,57 @@ lunr.Pipeline.registerFunction(skipStopWordFilter, "skipStopWordFilter");
 const skipStemmer = skipField("title", lunr.stemmer);
 lunr.Pipeline.registerFunction(skipStemmer, "skipStemmer");
 
+// Results are shown via a class, not :focus-within: Safari doesn't focus a
+// clicked link, which would hide them before the click lands.
+function openResults(formId) {
+  document.getElementById(formId)?.classList.add("search-open");
+}
+
+function closeResults(formId) {
+  document.getElementById(formId)?.classList.remove("search-open");
+}
+
+function setupSearchDropdown(formId, inputId, resultsId) {
+  const form = document.getElementById(formId);
+  const input = document.getElementById(inputId);
+  const results = document.getElementById(resultsId);
+  if (!form || !input || !results) return;
+  // Keep focus in the search bar when a result is clicked.
+  results.addEventListener("mousedown", (e) => {
+    if (e.target.closest("a")) e.preventDefault();
+  });
+  results.addEventListener("click", () => closeResults(formId));
+  // Reopen if returning to an input that already has a term.
+  input.addEventListener("click", () => form.onsubmit?.());
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      closeResults(formId);
+      input.blur();
+    }
+  });
+  form.addEventListener("focusout", (e) => {
+    if (!form.contains(e.relatedTarget)) closeResults(formId);
+  });
+  document.addEventListener("pointerdown", (e) => {
+    if (!form.contains(e.target)) closeResults(formId);
+  });
+}
+
+setupSearchDropdown("siteSearchForm", "siteSearchInput", "siteSearchResults");
+setupSearchDropdown("pageSearchForm", "pageSearchInput", "pageSearchResults");
+
 if (document.querySelector("#siteSearchForm")) setupSiteSearch();
 if (document.querySelector("#pageSearchForm")) setupPageSearch();
 
 window.addEventListener("blur", () => {
-  if (document.getElementById("siteSearchResults"))
-    document.getElementById("siteSearchResults").style.display = "none";
-  if (document.getElementById("pageSearchResults"))
-    document.getElementById("pageSearchResults").style.display = "none";
+  closeResults("siteSearchForm");
+  closeResults("pageSearchForm");
 });
 
 function site_search(term) {
   document.getElementById("siteSearchResults").innerHTML = "<ul></ul>";
   if (term) {
-    document.getElementById("siteSearchResults").style.display = "";
+    openResults("siteSearchForm");
     //put results on the screen.
     var searchterm = "";
     term
@@ -237,7 +274,7 @@ function site_search(term) {
         "<li class='siteSearchResult'>No results found</li>";
     }
   } else {
-    document.getElementById("siteSearchResults").style.display = "none";
+    closeResults("siteSearchForm");
   }
   return false;
 }
@@ -245,7 +282,7 @@ function site_search(term) {
 function page_search(term) {
   document.getElementById("pageSearchResults").innerHTML = "<ul></ul>";
   if (term) {
-    document.getElementById("pageSearchResults").style.display = "";
+    openResults("pageSearchForm");
     //put results on the screen.
     var searchterm = "";
     term
@@ -322,7 +359,7 @@ function page_search(term) {
         "<li class='pageSearchResult'>No results found</li>";
     }
   } else {
-    document.getElementById("pageSearchResults").style.display = "none";
+    closeResults("pageSearchForm");
   }
   return false;
 }

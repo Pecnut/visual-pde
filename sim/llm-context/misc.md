@@ -4,13 +4,13 @@
 
 ### Starting a new simulation
 
-Starting a new simulation will start a Grey-Scott simulation with two species, $u$ and $v$.
+Starting a new simulation will start a Grey-Scott simulation with two variables, $u$ and $v$.
 
 ### Changing the default variable names
 
-When changing "# species" to a higher number previously set, new species will be named by default to `SPECIES2`, `SPECIES3` and `SPECIES4`, for 2, 3, 4 species, respectively.
+When changing "# variables" to a higher number than the variables names previously provided cover, any additional variables will be named by default to `VARIABLE2`, `VARIABLE3`, ..., `VARIABLE8` (whichever position they fall in), regardless of how many variables there are in total.
 
-You are advised to change them to $v$, $w$, $q$ for simplicity, as other parameters are also defined according to them, e.g. $D_{SPECIES2} = D_v$ and so on.
+You are advised to change them to $v$, $w$, $q$ (for up to 4 variables) for simplicity, as other parameters are also defined according to them, e.g. $D_{VARIABLE2} = D_v$ and so on. variables beyond the fourth have no natural single-letter name; a common convention is `u5` through `u8`, though any valid name works.
 
 ### Default timestepping
 

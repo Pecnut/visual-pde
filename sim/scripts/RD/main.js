@@ -16,6 +16,9 @@ import {
   drawShaderFactorSharp,
   drawShaderFactorSmooth,
   uvFragShader,
+  drawShaderTopMRT,
+  drawShaderBotReplaceMRT,
+  drawShaderBotAddMRT,
 } from "./drawing_shaders.js";
 import {
   computeDisplayFunShaderTop,
@@ -27,8 +30,11 @@ import {
   minMaxShader,
   sumShader,
   probeShader,
+  computeDisplayFunShaderTopMRT,
+  computeDisplayFunShaderMidMRT,
+  probeShaderMRT,
 } from "./post_shaders.js";
-import { copyShader } from "../copy_shader.js";
+import { copyShader, copyShaderMRT } from "../copy_shader.js";
 import {
   RDShaderTop,
   RDShaderBot,
@@ -43,6 +49,8 @@ import {
   RDShaderUpdateCross,
   RDShaderAlgebraicSpecies,
   RDShaderEnforceDirichletTop,
+  RDShaderEnforceDirichletTopMRT,
+  RDShaderEnforceDirichletBotMRT,
   RDShaderAdvectionPreBC,
   RDShaderAdvectionPostBC,
   RDShaderDiffusionPreBC,
@@ -52,6 +60,12 @@ import {
   RDShaderMain,
   clampSpeciesToEdgeShader,
   globalIntegralShader,
+  globalIntegralShaderMRT,
+  RDShaderTopMRT,
+  RDShaderMainMRT,
+  RDShaderUpdateNormalMRT,
+  RDShaderUpdateCrossMRT,
+  RDShaderBotMRT,
 } from "./simulation_shaders.js";
 import { randShader, randNShader } from "../rand_shader.js";
 import {
@@ -62,18 +76,34 @@ import {
   surfaceVertexShaderColour,
   surfaceVertexShaderCustom,
   overlayShader,
+  fiveColourDisplayTopMRT,
+  overlayShaderMRT,
 } from "./display_shaders.js";
 import { getColours } from "../colourmaps.js";
 import { genericVertexShader } from "../generic_shaders.js";
 import {
   getPreset,
+  getResolvedPreset,
   getUserTextFields,
   getFieldsInView,
   getOldPresetFieldsToNew,
   getListOfPresetNames,
   coerceOptions,
 } from "./presets.js";
-import { clearShaderBot, clearShaderTop } from "./clear_shader.js";
+import {
+  clearShaderBot,
+  clearShaderTop,
+  clearShaderTopMRT,
+  clearShaderBotMRT,
+} from "./clear_shader.js";
+import {
+  numGroups,
+  groupOfSpecies,
+  channelCharOfSpecies,
+  diffusionLabel,
+  reactionTokenOfSpecies,
+  MAX_SPECIES_SUPPORTED,
+} from "./species_config.js";
 import { auxiliary_GLSL_funs } from "../auxiliary_GLSL_funs.js";
 import * as THREE from "../three.module.min.js";
 import { OrbitControls } from "../OrbitControls.js";
@@ -84,6 +114,7 @@ import { minifyPreset, maxifyPreset } from "./minify_preset.js";
 import { LZString } from "../lz-string.min.js";
 import {
   equationTEXFun,
+  buildEquationTEX,
   getDefaultTeXLabelsDiffusion,
   getDefaultTeXLabelsReaction,
   getDefaultTeXLabelsBCsICs,
@@ -109,13 +140,23 @@ async function VisualPDE(url) {
   let canvas, gl, manualInterpolationNeeded, camCanvas;
   let camera, simCamera, scene, simScene, renderer, aspectRatio, controls;
   let simTextures = [],
+    // Only allocated once numGroups(options.numSpecies)>1 (i.e. numSpecies>4). Each entry is
+    // a THREE.WebGLMultipleRenderTargets holding one colour attachment per texture group, so
+    // that a single Forward-Euler MRT pass can write every group's species in one render call.
+    // simTextures (above) stays exactly as it is today and is what's used whenever
+    // numGroups===1, so the <=4-species code path/performance is completely unaffected by
+    // this array ever existing. See species_config.js and the Stage 3 upgrade notes.
+    mrtSimTextures = [],
     postTexture,
     interpolationTexture,
     probeTexture,
     clickTexture,
     simTextureOpts,
     reductionTextures = [],
-    checkpointTexture;
+    checkpointTexture,
+    // Group 1 (species 5-8) counterpart of checkpointTexture; null whenever the current
+    // checkpoint has no group-1 data (numGroups was 1 when it was captured/loaded).
+    checkpointTextureGroup1;
   let displayMaterial,
     drawMaterial,
     clickMaterial,
@@ -132,6 +173,11 @@ async function VisualPDE(url) {
     arrowMaterial,
     interpolationMaterial,
     checkpointMaterial,
+    // MRT (>4-species) counterpart of checkpointMaterial - a MeshBasicMaterial can't sample
+    // two textures/write two outputs, so restoring a checkpoint once numGroups>1 needs a
+    // real dual-input, dual-output ShaderMaterial instead (built once at init, like
+    // checkpointMaterial itself).
+    checkpointMaterialMRT,
     minMaxMaterial,
     sumMaterial,
     tailGeometry,
@@ -164,10 +210,17 @@ async function VisualPDE(url) {
     imControllerTwo,
     imControllerBlend,
     editEquationsFolder,
+    variablesFolder,
+    diffusionCoeffsFolder,
+    reactionTermsFolder,
+    timescalesFolder,
+    diffusionMatrixButton,
+    crossDiffusionToggle,
     boundaryConditionsFolder,
     initialConditionsFolder,
-    advancedOptionsFolder,
+    // variablesAndParamsFolder,
     editViewFolder,
+    viewFeatureToggles,
     linesAnd3DFolder,
     linesFolderButton,
     threeDFolderButton,
@@ -221,7 +274,20 @@ async function VisualPDE(url) {
     longSimURL,
     lastShortenedOpts,
     lastShortKey,
-    shortenAborter;
+    shortenAborter,
+    // State used by syncURLWithOptions() to keep the URL up to date with options.
+    lastOptionsFingerprint,
+    settlingFingerprint,
+    lastURLOptions,
+    urlSyncTimer;
+  // How often (in ms) to check whether the URL needs replacing to reflect a change in
+  // options. Checking is cheap (a JSON.stringify, well under a millisecond even on a
+  // throttled phone); it's rebuilding the URL that costs, so syncURLWithOptions() waits
+  // for a second unchanged check rather than rebuilding it on the first.
+  const urlSyncPeriod = 200;
+  // The search parameters that describe the state of the simulation, and which are
+  // therefore superseded by the options parameter written by syncURLWithOptions().
+  const stateSearchParams = ["options", "preset", "mini", "view"];
   let spatialStepValue,
     nXDisc,
     nYDisc,
@@ -242,13 +308,50 @@ async function VisualPDE(url) {
     kineticParamsVals = [],
     kineticParamsCounter = 0,
     nextParamController;
+  let expressionsFolder,
+    expressionsStrs = {},
+    expressionsLabels = [],
+    expressionNameToCont = {},
+    expressionsCounter = 0,
+    nextExpressionController,
+    // Fully dependency-resolved expression definitions ({name: expandedGLSLDefinitionString}),
+    // rebuilt by refreshExpressionExpansions() (called at the top of updateShaders()) and
+    // consumed by parseShaderString(). See the "Expressions" feature (main.js, search for
+    // refreshExpressionExpansions) for the substitution design.
+    expandedExpressionDefs = {};
   const llmURL =
     "https://gemini.google.com/gem/1mJ4572e1TJwEHcaYDst0_9keZkx78-zn";
   const defaultPreset = "GrayScott";
-  const defaultSpecies = ["u", "v", "w", "q"];
-  const defaultReactions = ["UFUN", "VFUN", "WFUN", "QFUN"];
-  const timescaleTags = ["TU", "TV", "TW", "TQ"];
-  const placeholderSp = ["SPECIES1", "SPECIES2", "SPECIES3", "SPECIES4"];
+  // Species 5-8 have no natural single-letter mnemonic like u/v/w/q, so they use numeric
+  // suffixes, consistent with the existing diffusionStr_i_j/reactionStr_i field-naming
+  // convention. These four arrays are extended by appending only (indices 0-3 are untouched)
+  // so that every existing index-based/sliced-by-numSpecies consumer keeps working
+  // identically for numSpecies<=4. See species_config.js and the Stage 1 upgrade plan.
+  const defaultSpecies = ["u", "v", "w", "q", "u5", "u6", "u7", "u8"];
+  const defaultReactions = [
+    "UFUN",
+    "VFUN",
+    "WFUN",
+    "QFUN",
+    "UFUN5",
+    "UFUN6",
+    "UFUN7",
+    "UFUN8",
+  ];
+  // NB: controllers/regexes for TU5-TU8 don't exist until the GUI/TeX stages of the upgrade
+  // land, so consumers that iterate this array and look up a controller/regex by tag must
+  // guard against a missing entry (see the timescaleTags.forEach call sites below).
+  const timescaleTags = ["TU", "TV", "TW", "TQ", "TU5", "TU6", "TU7", "TU8"];
+  const placeholderSp = [
+    "VARIABLE1",
+    "VARIABLE2",
+    "VARIABLE3",
+    "VARIABLE4",
+    "VARIABLE5",
+    "VARIABLE6",
+    "VARIABLE7",
+    "VARIABLE8",
+  ];
   const listOfTypes = [
     "1Species", // 0
     "2Species", // 1
@@ -267,11 +370,18 @@ async function VisualPDE(url) {
   const brushActions = ["Replace", "Add", "Replace (smooth)", "Add (smooth)"],
     brushActionVals = ["replace", "add", "smoothreplace", "smoothadd"];
   let equationType, algebraicV, algebraicW, algebraicQ;
+  // Algebraic-species flags for species 5-8 (0-based indices 4-7), computed in
+  // setAlgebraicVarsFromOptions(). Species 1-4 continue to use algebraicV/W/Q above,
+  // unchanged - this only covers indices not already handled by those.
+  let algebraicSpeciesFlags = {};
   let takeAScreenshot = false,
     mediaRecorder,
     videoChunks;
   let buffer,
     stateBuffer,
+    // Group 1 (species 5-8) counterpart of stateBuffer, populated by getRawState() only
+    // once numGroups(numSpecies)>1 - see the 8-species upgrade's Stage 11.5 notes.
+    stateBufferGroup1,
     postBuffer,
     bufferFilled = false;
   const numsAsWords = [
@@ -294,7 +404,6 @@ async function VisualPDE(url) {
     ...getDefaultTeXLabelsBCsICs(),
     ...getDefaultTeXLabelsTimescales(),
   };
-  let globalIntegralFunTexStr = "";
   let listOfSpecies, listOfReactions, anySpeciesRegexStrs;
   const fieldsInView = getFieldsInView();
 
@@ -568,7 +677,10 @@ async function VisualPDE(url) {
   const oldQueryString = sessionStorage.getItem("oldQueryString");
   if (sessionOptions && oldQueryString == window.location.search) {
     loadPreset(JSON.parse(sessionOptions));
-    history.pushState({}, "", getSimURL(false));
+    // Reflect the restored state in the URL. This replaces the current entry rather than
+    // pushing a new one, since it describes the same simulation and so doesn't warrant its
+    // own entry in the session history.
+    syncURLWithOptions(true);
   }
   sessionStorage.removeItem("options");
   sessionStorage.removeItem("oldQueryString");
@@ -764,6 +876,9 @@ async function VisualPDE(url) {
   $("#close-bcs-ui").click(function () {
     closeComboBCsGUI();
   });
+  $("#diffusionMatrix_ok").click(function () {
+    closeDiffusionMatrixGUI();
+  });
   // Open the Definitions tab when the user clicks on the equation display.
   $("#equation_display").click(function () {
     editEquationsFolder.open();
@@ -829,6 +944,10 @@ async function VisualPDE(url) {
     if (!wantsTour && restart) {
       playSim();
     }
+  } else {
+    // Only show the updates message if the user wasn't just shown the
+    // welcome message, so they see at most one popup on load.
+    await showUpdatesMessage("2026-07-multi-species-llm", "2026-12-31");
   }
   if (wantsTour) {
     await new Promise(function (resolve) {
@@ -929,13 +1048,34 @@ async function VisualPDE(url) {
     if (isRecording) {
       stopRecording();
     }
-    // Check if the simulation has changed (options.preset will have changed).
-    if (Object.keys(diffObjects(getPreset(options.preset), options)).length) {
+    // Check if the simulation has changed from the preset it was loaded from
+    // (using the fully resolved preset, since a preset may inherit fields
+    // such as `expressions` from a parent rather than declaring them
+    // itself). `options` must be the first argument to diffObjects, since it
+    // only inspects the first argument's keys, and `options` is the side
+    // guaranteed to be complete.
+    if (
+      Object.keys(diffObjects(options, getResolvedPreset(options.preset)))
+        .length
+    ) {
       // If so, add to session storage so that it can be loaded on return, and add the URL to history.
       sessionStorage.setItem("options", JSON.stringify(options));
       sessionStorage.setItem("oldQueryString", window.location.search);
     }
   });
+
+  // Keep the URL in the address bar in sync with the state of the simulation, so that a
+  // reload, a bookmark or a copy-paste of the URL always captures whatever the user has
+  // changed. There's no address bar to keep up to date when we're embedded in an iframe,
+  // so don't pay the cost there.
+  if (!inIframe()) {
+    ["pointerdown", "keydown", "wheel"].forEach(function (eventName) {
+      window.addEventListener(eventName, startSyncingURL, {
+        capture: true,
+        once: true,
+      });
+    });
+  }
 
   // Begin the simulation.
   isLoading = false;
@@ -1030,19 +1170,15 @@ async function VisualPDE(url) {
     manualInterpolationNeeded
       ? (simTextureOpts.magFilter = THREE.NearestFilter)
       : (simTextureOpts.magFilter = THREE.LinearFilter);
+    // Store all the simulation textures in an array. They'll be in history order, so that the first element is the most
+    // recent. We'll write to the first texture, with later elements being further back in time.
     simTextures.push(
-      new THREE.WebGLRenderTarget(
+      ...createGroupRenderTargets(
         options.maxDisc,
         options.maxDisc,
         simTextureOpts,
       ),
     );
-    // Store all the simulation textures in an array. They'll be in history order, so that the first element is the most
-    // recent. We'll write to the first texture, with later elements being further back in time.
-    simTextures.push(simTextures[0].clone());
-    simTextures.push(simTextures[0].clone());
-    simTextures.push(simTextures[0].clone());
-    simTextures.push(simTextures[0].clone());
     postTexture = simTextures[0].clone();
     interpolationTexture = simTextures[0].clone();
 
@@ -1201,6 +1337,23 @@ async function VisualPDE(url) {
       blending: THREE.NoBlending,
       toneMapped: false,
     });
+    // MRT counterpart of checkpointMaterial (Stage 11.5 of the 8-species upgrade) - a
+    // MeshBasicMaterial can only sample one texture/write one output, so restoring a
+    // checkpoint once numGroups>1 needs a real ShaderMaterial instead. Reuses copyShaderMRT
+    // (already samples textureSource/textureSourceGroup1 and writes fragColor0/fragColor1)
+    // with its own dedicated uniforms object - NOT the shared `uniforms` - since that
+    // object's textureSource/textureSourceGroup1 are reassigned constantly by every other
+    // MRT material and this one's inputs (the checkpoint textures) are set only when
+    // restoring, not every frame.
+    checkpointMaterialMRT = new THREE.ShaderMaterial({
+      uniforms: {
+        textureSource: { type: "t", value: null },
+        textureSourceGroup1: { type: "t", value: null },
+      },
+      vertexShader: genericVertexShader(),
+      fragmentShader: copyShaderMRT(),
+      glslVersion: THREE.GLSL3,
+    });
     minMaxMaterial = new THREE.ShaderMaterial({
       uniforms: minMaxUniforms,
       vertexShader: genericVertexShader(),
@@ -1356,6 +1509,12 @@ async function VisualPDE(url) {
       function () {
         resize();
         renderIfNotRunning();
+        // Lightweight update rather than a full configureGUI() call (which could be
+        // expensive/flicker-prone fired repeatedly during a drag-resize) - onSmallScreen()
+        // is otherwise only re-checked inside configureGUI(), so without this the button
+        // could stay (in)visible after crossing the breakpoint until some other option
+        // change happens to trigger a reconfigure.
+        diffusionMatrixButton.classList.toggle("hidden", onSmallScreen());
       },
       false,
     );
@@ -1672,18 +1831,49 @@ async function VisualPDE(url) {
 
   function resizeTextures(shift = 0) {
     // Resize the computational domain by interpolating the existing domain onto the new discretisation.
+    // mrtSimTextures (the real 8-species state once numGroups>1) is allocated once at
+    // options.maxDisc size (Stage 3) and, unlike simTextures, was never being resized down
+    // to the actual discretisation (nXDisc/nYDisc) here - found via live testing (an initial
+    // condition meant to occupy a small region instead filling the whole domain, since the
+    // render target was much larger than intended). copyMaterial's shader/glslVersion are
+    // toggled dynamically since, unlike drawMaterial/clearMaterial, it's built once at
+    // startup rather than rebuilt whenever relevant options change - this is its only use.
+    const isMRT = numGroups(Number(options.numSpecies)) > 1;
+    if (isMRT) {
+      assignFragmentShader(copyMaterial, copyShaderMRT());
+      copyMaterial.glslVersion = THREE.GLSL3;
+    } else {
+      assignFragmentShader(copyMaterial, copyShader());
+      copyMaterial.glslVersion = null;
+    }
+    copyMaterial.needsUpdate = true;
     simDomain.material = copyMaterial;
 
-    // Resize all history terms. We'll do 1->0 then 2->1 etc, then cycle.
-    for (let ind = 1; ind < simTextures.length; ind++) {
-      uniforms.textureSource.value = simTextures[ind].texture;
-      simTextures[ind - 1].setSize(nXDisc + shift, nYDisc + shift);
-      renderer.setRenderTarget(simTextures[ind - 1]);
-      renderer.render(simScene, simCamera);
+    if (isMRT) {
+      // simTextures is unused once numGroups>1 (the real state lives in mrtSimTextures,
+      // matching every other Stage 3-8 MRT code path), so it's deliberately left alone here.
+      for (let ind = 1; ind < mrtSimTextures.length; ind++) {
+        uniforms.textureSource.value = mrtSimTextures[ind].texture[0];
+        uniforms.textureSourceGroup1.value = mrtSimTextures[ind].texture[1];
+        mrtSimTextures[ind - 1].setSize(nXDisc + shift, nYDisc + shift);
+        renderer.setRenderTarget(mrtSimTextures[ind - 1]);
+        renderer.render(simScene, simCamera);
+      }
+      mrtSimTextures.rotate(-1);
+      mrtSimTextures[0].dispose();
+      mrtSimTextures[0] = mrtSimTextures[1].clone();
+    } else {
+      // Resize all history terms. We'll do 1->0 then 2->1 etc, then cycle.
+      for (let ind = 1; ind < simTextures.length; ind++) {
+        uniforms.textureSource.value = simTextures[ind].texture;
+        simTextures[ind - 1].setSize(nXDisc + shift, nYDisc + shift);
+        renderer.setRenderTarget(simTextures[ind - 1]);
+        renderer.render(simScene, simCamera);
+      }
+      simTextures.rotate(-1);
+      simTextures[0].dispose();
+      simTextures[0] = simTextures[1].clone();
     }
-    simTextures.rotate(-1);
-    simTextures[0].dispose();
-    simTextures[0] = simTextures[1].clone();
 
     postTexture.setSize(nXDisc + shift, nYDisc + shift);
     postprocess();
@@ -1792,7 +1982,16 @@ async function VisualPDE(url) {
       embossLightDir: {
         type: "vec3",
       },
-      globalIntegralValue: {
+      globalIntegralValue1: {
+        type: "f",
+      },
+      globalIntegralValue2: {
+        type: "f",
+      },
+      globalIntegralValue3: {
+        type: "f",
+      },
+      globalIntegralValue4: {
         type: "f",
       },
       L: {
@@ -1896,6 +2095,24 @@ async function VisualPDE(url) {
         type: "t",
       },
       textureSource3: {
+        type: "t",
+      },
+      // Group 1's (species 5-8) current-state texture, only bound to an actual value once
+      // numGroups(options.numSpecies)>1 - see species_config.js and the Stage 4-8 upgrade
+      // notes.
+      textureSourceGroup1: {
+        type: "t",
+      },
+      // Group 1 counterparts of textureSource1/2/3, needed once AB2/Midpoint/RK4 support
+      // numSpecies>4 (Stage 13 of the 8-species upgrade) - only bound to an actual value
+      // once numGroups(options.numSpecies)>1, same as textureSourceGroup1 above.
+      textureSource1Group1: {
+        type: "t",
+      },
+      textureSource2Group1: {
+        type: "t",
+      },
+      textureSource3Group1: {
         type: "t",
       },
       t: {
@@ -2019,7 +2236,7 @@ async function VisualPDE(url) {
 
     controllers["whatToDraw"] = root
       .add(options, "whatToDraw", listOfSpecies)
-      .name("Species")
+      .name("Variable")
       .onChange(setBrushType);
 
     // Domain folder.
@@ -2039,6 +2256,7 @@ async function VisualPDE(url) {
       .add(options, "domainScale")
       .name("Largest side")
       .onFinishChange(function () {
+        this.setValue(autoCorrectSyntax(this.getValue()));
         resize();
         renderIfNotRunning();
       });
@@ -2047,6 +2265,7 @@ async function VisualPDE(url) {
       .add(options, "spatialStep")
       .name("Space step")
       .onFinishChange(function () {
+        this.setValue(autoCorrectSyntax(this.getValue()));
         resize();
         renderIfNotRunning();
       });
@@ -2186,273 +2405,244 @@ async function VisualPDE(url) {
       .add(options, "autoPauseAt")
       .name("Pause at $t=$")
       .onFinishChange(function () {
+        this.setValue(autoCorrectSyntax(this.getValue()));
         setAutoPauseStopValue();
         canAutoPause = uniforms.t.value < autoPauseStopValue;
         controllers["autoPauseAt"].domElement.blur();
       });
 
     // Let's put these in the left GUI.
-    // Definitions folder.
-    editEquationsFolder = leftGUI.addFolder("Edit");
+    // Equations folder.
+    editEquationsFolder = leftGUI.addFolder("Equations");
     root = editEquationsFolder;
     addInfoButton(root, "/user-guide/advanced-options#edit");
     addFocusLeftGUIButton(editEquationsFolder);
 
-    const defButtonList = addButtonList(root, "typesetCustomEqsButtonRow");
-    addToggle(
-      defButtonList,
-      "typesetCustomEqs",
-      '<i class="fa-regular fa-square-root-variable"></i> Typeset',
-      setEquationDisplayType,
-      null,
-      "Typeset the specified equations",
+    // Species-count/naming controllers get their own sub-folder too, back directly under
+    // "Equations" as a sibling of Timescales/Diffusion coefficients/Reaction terms (not nested
+    // inside "Parameters and notation" - Parameters/Expressions live there instead).
+    root = editEquationsFolder;
+    variablesFolder = editEquationsFolder.addFolder("Variables");
+    addInfoButton(variablesFolder, "/user-guide/advanced-options#variables");
+    root = variablesFolder;
+
+    controllers["speciesNames"] = root
+      .add(options, "speciesNames")
+      .name("Names")
+      .onFinishChange(function () {
+        setCustomNames();
+      });
+
+    // Number of species.
+    root
+      .add(options, "numSpecies", {
+        1: 1,
+        2: 2,
+        3: 3,
+        4: 4,
+        5: 5,
+        6: 6,
+        7: 7,
+        8: 8,
+      })
+      .name("Number")
+      .onChange(function () {
+        document.activeElement.blur();
+        options.speciesNames = speciesNamesToString();
+        setCustomNames();
+        // updateProblem() (De)allocates the MRT render targets itself now, before it
+        // triggers configureDimension()'s resize/render chain - see its definition.
+        updateProblem();
+        resetSim();
+      });
+
+    // Number of algebraic species.
+    controllers["algebraicSpecies"] = root
+      .add(options, "numAlgebraicSpecies", {
+        0: 0,
+        1: 1,
+        2: 2,
+        3: 3,
+        4: 4,
+        5: 5,
+        6: 6,
+        7: 7,
+      })
+      .name("No. algebraic")
+      .onChange(function () {
+        updatingAlgebraicSpecies = true;
+        updateProblem();
+        updatingAlgebraicSpecies = false;
+        resetSim();
+      });
+
+    // Diffusion coefficients go back directly under "Equations", not nested in the
+    // timescales sub-folder. They get their own nested sub-folder in turn (rather than
+    // sitting directly in "Equations" alongside timescales/reaction terms) since
+    // cross-diffusion can show up to 64 of them at once. Always created (regardless of
+    // crossDiffusion), matching the existing show/hide pattern (showSpeciesGUIPanels etc.
+    // already hide most of these when cross-diffusion is off) - only the "expand as matrix" button
+    // (added below, once all these controllers exist) is conditional.
+    root = editEquationsFolder;
+    diffusionCoeffsFolder = editEquationsFolder.addFolder(
+      "Diffusion coefficients",
+    );
+    root = diffusionCoeffsFolder;
+    addInfoButton(root, "/user-guide/advanced-options#diffusion-coefficients");
+
+    // Diffusion coefficient controllers for every (i,j) pair, all 8 species. Controller keys
+    // use diffCtrlKey(i,j) - species 1-4 keep their legacy letter-pair keys (Duu..Dqq),
+    // touching species 5-8 uses a numeric key (see species_config.js/diffusionLabel for the
+    // same convention). TeX select keys reuse defaultSpecies so the TeX display can hook into
+    // them; selectTeX/deselectTeX are no-ops for keys with no TeXStrings entry.
+    // allDiffusionTexKeys collects every key seen below, so hovering the folder's own title bar
+    // (rather than any individual controller) can highlight all of them at once - see the
+    // setOnFolderHoverEnter/Leave calls below the loop.
+    const allDiffusionTexKeys = [];
+    for (let i = 1; i <= MAX_SPECIES_SUPPORTED; i++) {
+      for (let j = 1; j <= MAX_SPECIES_SUPPORTED; j++) {
+        const key = diffCtrlKey(i, j);
+        const texKey =
+          defaultSpecies[i - 1].toUpperCase() +
+          defaultSpecies[j - 1].toUpperCase();
+        controllers[key] = root
+          .add(options, "diffusionStr_" + i + "_" + j)
+          .onFinishChange(function () {
+            this.setValue(autoCorrectSyntax(this.getValue()));
+            setRDEquations();
+            setEquationDisplayType();
+          });
+        // Self-diffusion (i===j) needs both the single-subscript key ("U5", matched when
+        // cross-diffusion is off) and the doubled key ("U5U5", matched when it's on) - e.g.
+        // Dqq passes ["Q", "QQ"], not just "QQ".
+        const texKeys =
+          i === j ? [defaultSpecies[i - 1].toUpperCase(), texKey] : [texKey];
+        setOnfocus(controllers[key], selectTeX, texKeys);
+        setOnblur(controllers[key], deselectTeX, texKeys);
+        allDiffusionTexKeys.push(...texKeys);
+      }
+    }
+    setOnFolderHoverEnter(
+      diffusionCoeffsFolder,
+      selectTeX,
+      allDiffusionTexKeys,
+    );
+    setOnFolderHoverLeave(
+      diffusionCoeffsFolder,
+      deselectTeX,
+      allDiffusionTexKeys,
+    );
+    setOnFolderTapToggle(
+      diffusionCoeffsFolder,
+      selectTeX,
+      deselectTeX,
+      allDiffusionTexKeys,
     );
 
-    controllers["TU"] = root
-      .add(options, "timescale_1")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["TU"], selectTeX, ["TU"]);
-    setOnblur(controllers["TU"], deselectTeX, ["TU"]);
+    // Cross-diffusion toggle button.
+    const crossDiffusionButtonList = addButtonList(root);
+    crossDiffusionToggle = addToggle(
+      crossDiffusionButtonList,
+      "crossDiffusion",
+      '<i class="fa-regular fa-arrow-down-up-across-line"></i> Cross diffusion',
+      function () {
+        updateProblem();
+      },
+      "cross_diffusion_controller",
+      "Toggle cross diffusion",
+    );
 
-    controllers["TV"] = root
-      .add(options, "timescale_2")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["TV"], selectTeX, ["TV"]);
-    setOnblur(controllers["TV"], deselectTeX, ["TV"]);
+    // Button to open the diffusion matrix popup, injected into the sub-folder's title bar
+    // (mirroring addInfoButton's DOM-injection pattern). Its visibility (crossDiffusion on,
+    // not a small screen) is kept up to date in configureGUI(), not here.
+    addDiffusionMatrixButton(diffusionCoeffsFolder);
 
-    controllers["TW"] = root
-      .add(options, "timescale_3")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["TW"], selectTeX, ["TW"]);
-    setOnblur(controllers["TW"], deselectTeX, ["TW"]);
+    // Reaction terms get their own sub-folder too, back directly under "Equations" rather
+    // than nested in the diffusion sub-folder.
+    root = editEquationsFolder;
+    reactionTermsFolder = editEquationsFolder.addFolder("Forcing terms");
+    root = reactionTermsFolder;
+    addInfoButton(root, "/user-guide/advanced-options#forcing-terms");
 
-    controllers["TQ"] = root
-      .add(options, "timescale_4")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["TQ"], selectTeX, ["TQ"]);
-    setOnblur(controllers["TQ"], deselectTeX, ["TQ"]);
+    // Reaction term controllers for all 8 species, keyed "reaction_1".."reaction_8" (species
+    // 1-4 historically used "f"/"g"/"h"/"j" - purely an internal lookup key, never serialized
+    // to options/URLs - renamed here to match species 5-8's naming, which has no natural
+    // single-letter mnemonic).
+    // allReactionTexKeys mirrors allDiffusionTexKeys above - collected so hovering the folder's
+    // own title bar can highlight every reaction term at once.
+    const allReactionTexKeys = [];
+    for (let i = 1; i <= MAX_SPECIES_SUPPORTED; i++) {
+      const key = "reaction_" + i;
+      const texKey = reactionTokenOfSpecies(i - 1);
+      controllers[key] = root
+        .add(options, "reactionStr_" + i)
+        .onFinishChange(function () {
+          this.setValue(autoCorrectSyntax(this.getValue()));
+          setRDEquations();
+          setEquationDisplayType();
+        });
+      setOnfocus(controllers[key], selectTeX, [texKey]);
+      setOnblur(controllers[key], deselectTeX, [texKey]);
+      allReactionTexKeys.push(texKey);
+    }
+    setOnFolderHoverEnter(reactionTermsFolder, selectTeX, allReactionTexKeys);
+    setOnFolderHoverLeave(reactionTermsFolder, deselectTeX, allReactionTexKeys);
+    setOnFolderTapToggle(
+      reactionTermsFolder,
+      selectTeX,
+      deselectTeX,
+      allReactionTexKeys,
+    );
 
-    controllers["Duu"] = root
-      .add(options, "diffusionStr_1_1")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["Duu"], selectTeX, ["U", "UU"]);
-    setOnblur(controllers["Duu"], deselectTeX, ["U", "UU"]);
+    // Timescale controllers get their own sub-folder, shown only when the "Scales" toggle is
+    // on (configureGUI() shows/hides the folder itself, mirroring how it already showed/hid
+    // each controller individually before this folder existed).
+    timescalesFolder = editEquationsFolder.addFolder("Timescales");
+    root = timescalesFolder;
+    addInfoButton(root, "/user-guide/advanced-options#timescales");
 
-    controllers["Duv"] = root
-      .add(options, "diffusionStr_1_2")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["Duv"], selectTeX, ["UV"]);
-    setOnblur(controllers["Duv"], deselectTeX, ["UV"]);
+    // Timescale controllers for all 8 species. See timescaleTag() for the species 1-4 vs 5-8
+    // key-naming split (matching timescaleTags above).
+    const allTimescaleTexKeys = [];
+    for (let i = 1; i <= MAX_SPECIES_SUPPORTED; i++) {
+      const tTag = timescaleTag(i);
+      controllers[tTag] = root
+        .add(options, "timescale_" + i)
+        .onFinishChange(function () {
+          this.setValue(autoCorrectSyntax(this.getValue()));
+          setRDEquations();
+          setEquationDisplayType();
+        });
+      setOnfocus(controllers[tTag], selectTeX, [tTag]);
+      setOnblur(controllers[tTag], deselectTeX, [tTag]);
+      allTimescaleTexKeys.push(tTag);
+    }
+    setOnFolderHoverEnter(timescalesFolder, selectTeX, allTimescaleTexKeys);
+    setOnFolderHoverLeave(timescalesFolder, deselectTeX, allTimescaleTexKeys);
+    setOnFolderTapToggle(
+      timescalesFolder,
+      selectTeX,
+      deselectTeX,
+      allTimescaleTexKeys,
+    );
 
-    controllers["Duw"] = root
-      .add(options, "diffusionStr_1_3")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["Duw"], selectTeX, ["UW"]);
-    setOnblur(controllers["Duw"], deselectTeX, ["UW"]);
-
-    controllers["Duq"] = root
-      .add(options, "diffusionStr_1_4")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["Duq"], selectTeX, ["UQ"]);
-    setOnblur(controllers["Duq"], deselectTeX, ["UQ"]);
-
-    controllers["Dvu"] = root
-      .add(options, "diffusionStr_2_1")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["Dvu"], selectTeX, ["VU"]);
-    setOnblur(controllers["Dvu"], deselectTeX, ["VU"]);
-
-    controllers["Dvv"] = root
-      .add(options, "diffusionStr_2_2")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["Dvv"], selectTeX, ["V", "VV"]);
-    setOnblur(controllers["Dvv"], deselectTeX, ["V", "VV"]);
-
-    controllers["Dvw"] = root
-      .add(options, "diffusionStr_2_3")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["Dvw"], selectTeX, ["VW"]);
-    setOnblur(controllers["Dvw"], deselectTeX, ["VW"]);
-
-    controllers["Dvq"] = root
-      .add(options, "diffusionStr_2_4")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["Dvq"], selectTeX, ["VQ"]);
-    setOnblur(controllers["Dvq"], deselectTeX, ["VQ"]);
-
-    controllers["Dwu"] = root
-      .add(options, "diffusionStr_3_1")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["Dwu"], selectTeX, ["WU"]);
-    setOnblur(controllers["Dwu"], deselectTeX, ["WU"]);
-
-    controllers["Dwv"] = root
-      .add(options, "diffusionStr_3_2")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["Dwv"], selectTeX, ["WV"]);
-    setOnblur(controllers["Dwv"], deselectTeX, ["WV"]);
-
-    controllers["Dww"] = root
-      .add(options, "diffusionStr_3_3")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["Dww"], selectTeX, ["W", "WW"]);
-    setOnblur(controllers["Dww"], deselectTeX, ["W", "WW"]);
-
-    controllers["Dwq"] = root
-      .add(options, "diffusionStr_3_4")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["Dwq"], selectTeX, ["WQ"]);
-    setOnblur(controllers["Dwq"], deselectTeX, ["WQ"]);
-
-    controllers["Dqu"] = root
-      .add(options, "diffusionStr_4_1")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["Dqu"], selectTeX, ["QU"]);
-    setOnblur(controllers["Dqu"], deselectTeX, ["QU"]);
-
-    controllers["Dqv"] = root
-      .add(options, "diffusionStr_4_2")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["Dqv"], selectTeX, ["QV"]);
-    setOnblur(controllers["Dqv"], deselectTeX, ["QV"]);
-
-    controllers["Dqw"] = root
-      .add(options, "diffusionStr_4_3")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["Dqw"], selectTeX, ["QW"]);
-    setOnblur(controllers["Dqw"], deselectTeX, ["QW"]);
-
-    controllers["Dqq"] = root
-      .add(options, "diffusionStr_4_4")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["Dqq"], selectTeX, ["Q", "QQ"]);
-    setOnblur(controllers["Dqq"], deselectTeX, ["Q", "QQ"]);
-
-    // Custom f(u,v) and g(u,v).
-    controllers["f"] = root
-      .add(options, "reactionStr_1")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["f"], selectTeX, ["UFUN"]);
-    setOnblur(controllers["f"], deselectTeX, ["UFUN"]);
-
-    controllers["g"] = root
-      .add(options, "reactionStr_2")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["g"], selectTeX, ["VFUN"]);
-    setOnblur(controllers["g"], deselectTeX, ["VFUN"]);
-
-    controllers["h"] = root
-      .add(options, "reactionStr_3")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["h"], selectTeX, ["WFUN"]);
-    setOnblur(controllers["h"], deselectTeX, ["WFUN"]);
-
-    controllers["j"] = root
-      .add(options, "reactionStr_4")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-        setEquationDisplayType();
-      });
-    setOnfocus(controllers["j"], selectTeX, ["QFUN"]);
-    setOnblur(controllers["j"], deselectTeX, ["QFUN"]);
+    root = editEquationsFolder;
 
     parametersFolder = leftGUI.addFolder("Parameters");
     addInfoButton(parametersFolder, "/user-guide/advanced-options#parameters");
     addFocusLeftGUIButton(parametersFolder);
     setParamsFromKineticString();
+
+    // Expressions folder: named text macros (not uniforms - see the Expressions design near
+    // refreshExpressionExpansions()), substituted directly into shader source at shader-
+    // construction time.
+    expressionsFolder = leftGUI.addFolder("Substitutions");
+    addInfoButton(
+      expressionsFolder,
+      "/user-guide/advanced-options#substitutions",
+    );
+    addFocusLeftGUIButton(expressionsFolder);
+    setExpressionsFromString();
 
     // Boundary conditions folder.
     boundaryConditionsFolder = leftGUI.addFolder("Boundary conditions");
@@ -2460,178 +2650,69 @@ async function VisualPDE(url) {
     addInfoButton(root, "/user-guide/advanced-options#boundary-conditions");
     addFocusLeftGUIButton(boundaryConditionsFolder);
 
-    controllers["uBCs"] = root
-      .add(options, "boundaryConditions_1", {})
-      .onChange(function () {
-        setRDEquations();
-        setBCsGUI();
-        // Show the combo BCs GUI if the user has selected combo.
-        if (this.getValue() == "combo") {
-          document.getElementById("comboBCsButton0").click();
-        }
-        document.activeElement.blur();
-      });
-    addComboBCsButton(controllers["uBCs"], 0);
+    // Boundary-condition controls (dropdown, dirichlet, neumann, robin, combo) for all 8
+    // species. Keyed by defaultSpecies[i]+"BCs"/"dirichlet"+S/"neumann"+S/"robin"+S/"combo"+S
+    // (S = defaultSpecies[i].toUpperCase(), e.g. "u"->"U", "u5"->"U5") - addComboBCsButton
+    // (reused unmodified below) already builds its "combo"+X/X+"BCs" controller keys from
+    // exactly this defaultSpecies-derived naming.
+    for (let i = 1; i <= MAX_SPECIES_SUPPORTED; i++) {
+      const s = defaultSpecies[i - 1]; // "u".."q", "u5".."u8"
+      const S = s.toUpperCase(); // "U".."Q", "U5".."U8"
+      const bcsKey = s + "BCs";
+      const speciesInd = i - 1; // 0-based, for addComboBCsButton/comboBCsButton<N> DOM id.
 
-    controllers["dirichletU"] = root
-      .add(options, "dirichletStr_1")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-      });
+      controllers[bcsKey] = root
+        .add(options, "boundaryConditions_" + i, {})
+        .onChange(function () {
+          setRDEquations();
+          setBCsGUI();
+          // Show the combo BCs GUI if the user has selected combo.
+          if (this.getValue() == "combo") {
+            document.getElementById("comboBCsButton" + speciesInd).click();
+          }
+          document.activeElement.blur();
+        });
+      // Preserves the original qBCs controller's fallback label (likely superseded almost
+      // immediately by the setGUIControllerName call in setEquationDisplayType(), but kept for
+      // parity with pre-refactor behaviour).
+      if (i === 4) controllers[bcsKey].name("$q$");
+      addComboBCsButton(controllers[bcsKey], speciesInd);
 
-    controllers["neumannU"] = root
-      .add(options, "neumannStr_1")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-      });
+      controllers["dirichlet" + S] = root
+        .add(options, "dirichletStr_" + i)
+        .onFinishChange(function () {
+          this.setValue(autoCorrectSyntax(this.getValue()));
+          setRDEquations();
+        });
 
-    controllers["robinU"] = root
-      .add(options, "robinStr_1")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-      });
+      controllers["neumann" + S] = root
+        .add(options, "neumannStr_" + i)
+        .onFinishChange(function () {
+          this.setValue(autoCorrectSyntax(this.getValue()));
+          setRDEquations();
+        });
 
-    controllers["comboU"] = root
-      .add(options, "comboStr_1")
-      .name("Details")
-      .onFinishChange(function () {
-        this.setValue(this.getValue());
-        setRDEquations();
-        if (options.boundaryConditions_1 == "combo") configureComboBCsGUI();
-      });
+      controllers["robin" + S] = root
+        .add(options, "robinStr_" + i)
+        .onFinishChange(function () {
+          this.setValue(autoCorrectSyntax(this.getValue()));
+          setRDEquations();
+        });
 
-    controllers["vBCs"] = root
-      .add(options, "boundaryConditions_2", {})
-      .onChange(function () {
-        setRDEquations();
-        setBCsGUI();
-        // Show the combo BCs GUI if the user has selected combo.
-        if (this.getValue() == "combo") {
-          document.getElementById("comboBCsButton1").click();
-        }
-        document.activeElement.blur();
-      });
-    addComboBCsButton(controllers["vBCs"], 1);
-
-    controllers["dirichletV"] = root
-      .add(options, "dirichletStr_2")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-      });
-
-    controllers["neumannV"] = root
-      .add(options, "neumannStr_2")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-      });
-
-    controllers["robinV"] = root
-      .add(options, "robinStr_2")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-      });
-
-    controllers["comboV"] = root
-      .add(options, "comboStr_2")
-      .name("Details")
-      .onFinishChange(function () {
-        this.setValue(this.getValue());
-        setRDEquations();
-        if (options.boundaryConditions_2 == "combo") configureComboBCsGUI();
-      });
-
-    controllers["wBCs"] = root
-      .add(options, "boundaryConditions_3", {})
-      .onChange(function () {
-        setRDEquations();
-        setBCsGUI();
-        // Show the combo BCs GUI if the user has selected combo.
-        if (this.getValue() == "combo") {
-          document.getElementById("comboBCsButton2").click();
-        }
-        document.activeElement.blur();
-      });
-    addComboBCsButton(controllers["wBCs"], 2);
-
-    controllers["dirichletW"] = root
-      .add(options, "dirichletStr_3")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-      });
-
-    controllers["neumannW"] = root
-      .add(options, "neumannStr_3")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-      });
-
-    controllers["robinW"] = root
-      .add(options, "robinStr_3")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-      });
-
-    controllers["comboW"] = root
-      .add(options, "comboStr_3")
-      .name("Details")
-      .onFinishChange(function () {
-        this.setValue(this.getValue());
-        setRDEquations();
-        if (options.boundaryConditions_3 == "combo") configureComboBCsGUI();
-      });
-
-    controllers["qBCs"] = root
-      .add(options, "boundaryConditions_4", {})
-      .name("$q$")
-      .onChange(function () {
-        setRDEquations();
-        setBCsGUI();
-        // Show the combo BCs GUI if the user has selected combo.
-        if (this.getValue() == "combo") {
-          document.getElementById("comboBCsButton3").click();
-        }
-        document.activeElement.blur();
-      });
-    addComboBCsButton(controllers["qBCs"], 3);
-
-    controllers["dirichletQ"] = root
-      .add(options, "dirichletStr_4")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-      });
-
-    controllers["neumannQ"] = root
-      .add(options, "neumannStr_4")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-      });
-
-    controllers["robinQ"] = root
-      .add(options, "robinStr_4")
-      .onFinishChange(function () {
-        this.setValue(autoCorrectSyntax(this.getValue()));
-        setRDEquations();
-      });
-
-    controllers["comboQ"] = root
-      .add(options, "comboStr_4")
-      .name("Details")
-      .onFinishChange(function () {
-        this.setValue(this.getValue());
-        setRDEquations();
-        if (options.boundaryConditions_4 == "combo") configureComboBCsGUI();
-      });
+      controllers["combo" + S] = root
+        .add(options, "comboStr_" + i)
+        .name("Details")
+        .onFinishChange(function () {
+          // Unlike the purely mathematical fields, "" is meaningful here - it means "no
+          // per-side overrides" - so don't let autoCorrectSyntax turn it into a stray "0".
+          if (!isEmptyString(this.getValue()))
+            this.setValue(autoCorrectSyntax(this.getValue()));
+          setRDEquations();
+          if (options["boundaryConditions_" + i] == "combo") {
+            configureComboBCsGUI();
+          }
+        });
+    }
 
     // Initial conditions folder.
     initialConditionsFolder = leftGUI.addFolder("Initial conditions");
@@ -2667,67 +2748,15 @@ async function VisualPDE(url) {
         setClearShader();
       });
 
-    // Equations folder.
-    advancedOptionsFolder = leftGUI.addFolder("Advanced options");
-    root = advancedOptionsFolder;
-    root.domElement.classList.add("advancedOptions");
-    addInfoButton(root, "/user-guide/advanced-options#advanced-options-");
-
-    // Number of species.
-    root
-      .add(options, "numSpecies", { 1: 1, 2: 2, 3: 3, 4: 4 })
-      .name("# Species")
-      .onChange(function () {
-        document.activeElement.blur();
-        options.speciesNames = speciesNamesToString();
-        setCustomNames();
-        updateProblem();
-        resetSim();
-      });
-
-    // Number of algebraic species.
-    controllers["algebraicSpecies"] = root
-      .add(options, "numAlgebraicSpecies", { 0: 0, 1: 1, 2: 2, 3: 3 })
-      .name("# Algebraic")
-      .onChange(function () {
-        updatingAlgebraicSpecies = true;
-        updateProblem();
-        updatingAlgebraicSpecies = false;
-        resetSim();
-      });
-
-    controllers["speciesNames"] = root
-      .add(options, "speciesNames")
-      .name("Species names")
-      .onFinishChange(function () {
-        setCustomNames();
-      });
-
-    // Cross diffusion.
-    const crossDiffusionButtonList = addButtonList(root);
-    addToggle(
-      crossDiffusionButtonList,
-      "crossDiffusion",
-      '<i class="fa-regular fa-arrow-down-up-across-line"></i> Cross diffusion',
-      function () {
-        updateProblem();
-      },
-      "cross_diffusion_controller",
-      "Toggle cross diffusion",
-    );
-
-    addToggle(
-      crossDiffusionButtonList,
-      "timescales",
-      '<i class="fa-regular fa-clock"></i>Scales',
-      function () {
-        configureGUI();
-        setRDEquations();
-        setEquationDisplayType();
-      },
-      "timescales_controller",
-      "Toggle the use of custom timescales",
-    );
+    // Species 5-8 initial conditions (Stage 9 of the 8-species upgrade).
+    for (let i = 5; i <= MAX_SPECIES_SUPPORTED; i++) {
+      controllers["initCond_" + i] = root
+        .add(options, "initCond_" + i)
+        .onFinishChange(function () {
+          this.setValue(autoCorrectSyntax(this.getValue()));
+          setClearShader();
+        });
+    }
 
     // Images folder.
     fIm = rightGUI.addFolder("Images");
@@ -2786,8 +2815,8 @@ async function VisualPDE(url) {
       });
 
     // Miscellaneous folder.
-    root = rightGUI.addFolder("Misc.");
-    addInfoButton(root, "/user-guide/advanced-options#misc-");
+    root = rightGUI.addFolder("More...");
+    addInfoButton(root, "/user-guide/advanced-options#misc");
 
     root
       .addColor(options, "backgroundColour")
@@ -2908,18 +2937,14 @@ async function VisualPDE(url) {
         updateRandomSeed();
       });
 
-    controllers["globalIntegralFun"] = root
-      .add(options, "globalIntegralFun")
-      .name("To integrate")
-      .onFinishChange(function () {
-        updateGlobalIntegralFun();
-      });
-
+    // The number of timesteps between updates of any Int(...) quantities referenced in
+    // the simulation (see reconcileGlobalIntegrals()). No onFinishChange rebuild needed -
+    // this field only gates a per-timestep modulo check, not a shader rebuild.
     controllers["globalIntegralUpdatePeriod"] = root
       .add(options, "globalIntegralUpdatePeriod", 1, 1000, 1)
-      .name("Update period");
+      .name("Int. update");
 
-    devFolder = root.addFolder("Dev");
+    devFolder = root.addFolder("Developer tools");
     root = devFolder;
     addInfoButton(root, "/user-guide/advanced-options#dev");
     // Dev.
@@ -3044,12 +3069,6 @@ async function VisualPDE(url) {
     settingsTitle.innerHTML = "Settings";
     settingsTitle.classList.add("ui_title");
     rightGUI.domElement.prepend(settingsTitle);
-
-    // Add a title to the leftGUI.
-    const equationsTitle = document.createElement("div");
-    equationsTitle.innerHTML = "Equations";
-    equationsTitle.classList.add("ui_title");
-    leftGUI.domElement.prepend(equationsTitle);
 
     // Add the light/dark buttons to the rightGUI.
     const darkButton = document.createElement("button");
@@ -3182,6 +3201,7 @@ async function VisualPDE(url) {
       .add(options, "minColourValue")
       .name("Min value")
       .onFinishChange(function () {
+        this.setValue(autoCorrectSyntax(this.getValue()));
         setColourRangeFromDef();
         renderIfNotRunning();
         updateView(this.property);
@@ -3191,6 +3211,7 @@ async function VisualPDE(url) {
       .add(options, "maxColourValue")
       .name("Max value")
       .onFinishChange(function () {
+        this.setValue(autoCorrectSyntax(this.getValue()));
         setColourRangeFromDef();
         renderIfNotRunning();
         updateView(this.property);
@@ -3420,6 +3441,7 @@ async function VisualPDE(url) {
       `<i class="fa-solid fa-clover"></i> Enable`,
       function () {
         setDisplayColourAndType();
+        setPostFunFragShader();
         renderIfNotRunning();
         updateView("overlay");
       },
@@ -3444,7 +3466,7 @@ async function VisualPDE(url) {
       .onFinishChange(function () {
         this.setValue(autoCorrectSyntax(this.getValue()));
         setDisplayColourAndType();
-        if (options.plotType == "line") setPostFunFragShader();
+        setPostFunFragShader();
         renderIfNotRunning();
         updateView(this.property);
       });
@@ -3622,6 +3644,7 @@ async function VisualPDE(url) {
     controllers["arrowLengthMax"] = root
       .add(options, "arrowLengthMax")
       .onFinishChange(function () {
+        this.setValue(autoCorrectSyntax(this.getValue()));
         configureVectorField();
         renderIfNotRunning();
         updateView(this.property);
@@ -3675,6 +3698,7 @@ async function VisualPDE(url) {
       .add(options, "probeFun")
       .name("Expression")
       .onFinishChange(function () {
+        this.setValue(autoCorrectSyntax(this.getValue()));
         setProbeShader();
         renderIfNotRunning();
         updateView(this.property);
@@ -3684,6 +3708,7 @@ async function VisualPDE(url) {
       .add(options, "probeX")
       .name("$x$ location")
       .onFinishChange(function () {
+        this.setValue(autoCorrectSyntax(this.getValue()));
         setProbeShader();
         renderIfNotRunning();
         updateView(this.property);
@@ -3693,6 +3718,7 @@ async function VisualPDE(url) {
       .add(options, "probeY")
       .name("$y$ location")
       .onFinishChange(function () {
+        this.setValue(autoCorrectSyntax(this.getValue()));
         setProbeShader();
         renderIfNotRunning();
         updateView(this.property);
@@ -3717,7 +3743,8 @@ async function VisualPDE(url) {
       ["wide"],
     );
 
-    addViewsSubmenuToggle(
+    viewFeatureToggles = {};
+    viewFeatureToggles["contours"] = addViewsSubmenuToggle(
       effectsButtons,
       '<i class="fa-solid fa-bullseye"></i> Contours',
       "Show contour options",
@@ -3725,7 +3752,7 @@ async function VisualPDE(url) {
       ["wide"],
     );
 
-    addViewsSubmenuToggle(
+    viewFeatureToggles["emboss"] = addViewsSubmenuToggle(
       effectsButtons,
       '<i class="fa-solid fa-lightbulb"></i> Lighting',
       "Show lighting options",
@@ -3733,7 +3760,7 @@ async function VisualPDE(url) {
       ["wide"],
     );
 
-    addViewsSubmenuToggle(
+    viewFeatureToggles["overlay"] = addViewsSubmenuToggle(
       effectsButtons,
       '<i class="fa-solid fa-clover"></i> Overlay',
       "Show overlay options",
@@ -3741,7 +3768,7 @@ async function VisualPDE(url) {
       ["wide"],
     );
 
-    addViewsSubmenuToggle(
+    viewFeatureToggles["vectorField"] = addViewsSubmenuToggle(
       effectsButtons,
       '<i class="fa-solid fa-arrow-right-arrow-left"></i> Vector field',
       "Show vector field options",
@@ -3749,7 +3776,7 @@ async function VisualPDE(url) {
       ["wide"],
     );
 
-    addViewsSubmenuToggle(
+    viewFeatureToggles["probing"] = addViewsSubmenuToggle(
       effectsButtons,
       '<i class="fa-solid fa-chart-line"></i> Time series',
       "Show time series options",
@@ -3988,18 +4015,27 @@ async function VisualPDE(url) {
   }
 
   function setBrushType() {
+    // Must run before anything below that could reference an Int(...) expression - see
+    // reconcileGlobalIntegrals().
+    reconcileGlobalIntegrals();
     // Construct a drawing shader based on the selected type and the value string.
     // Insert any user-defined kinetic parameters, given as a string that needs parsing.
     // Extract variable definitions, separated by semicolons or commas, ignoring whitespace.
-    let shaderStr = kineticUniformsForShader() + drawShaderTop();
+    const isMRT = numGroups(Number(options.numSpecies)) > 1;
+    let shaderStr =
+      kineticUniformsForShader() +
+      (isMRT ? drawShaderTopMRT() : drawShaderTop());
     let radiusStr =
       "float brushRadius = " +
       parseShaderString(options.brushRadius.toString()) +
       ";\n";
 
-    // If the radius string contains any references to u,v,w,q, replace them with references to the species at the
-    // brush centre, not the current pixel.
-    radiusStr = radiusStr.replace(/\buvwq\./g, "uvwqBrush.");
+    // If the radius string contains any references to u,v,w,q (or, for group-1 species,
+    // u5..u8), replace them with references to the species at the brush centre, not the
+    // current pixel.
+    radiusStr = radiusStr
+      .replace(/\buvwq\./g, "uvwqBrush.")
+      .replace(/\buvwq2\./g, "uvwq2Brush.");
     // If the radius string contains any references to I_S or I_T, replace them with references to the value at the
     // brush centre, not the current pixel.
     radiusStr = radiusStr.replace(/\b(I_[ST])([RGBA]?)\b/g, "$1Brush$2");
@@ -4031,42 +4067,61 @@ async function VisualPDE(url) {
         break;
     }
 
-    // Configure the action of the brush.
+    // Configure the action of the brush. Brush drawing always targets exactly one species
+    // (one channel of one group) at a time, so the MRT Bot variants only need
+    // FRAGCOLOR/UVWQGROUP substituted for whichever group that species belongs to (see
+    // below) - not a full dual-output "combine both groups' equations" treatment like the
+    // main simulation shader.
+    const botReplace = isMRT
+      ? drawShaderBotReplaceMRT()
+      : drawShaderBotReplace();
+    const botAdd = isMRT ? drawShaderBotAddMRT() : drawShaderBotAdd();
     if (options.brushType == "custom") {
       shaderStr += drawShaderCustom();
       shaderStr += options.brushAction.includes("replace")
-        ? drawShaderBotReplace()
-        : drawShaderBotAdd();
+        ? botReplace
+        : botAdd;
     } else {
       switch (options.brushAction) {
         case "replace":
           shaderStr += drawShaderFactorSharp();
-          shaderStr += drawShaderBotReplace();
+          shaderStr += botReplace;
           break;
         case "add":
           shaderStr += drawShaderFactorSharp();
-          shaderStr += drawShaderBotAdd();
+          shaderStr += botAdd;
           break;
         case "smoothreplace":
           shaderStr += drawShaderFactorSmooth();
-          shaderStr += drawShaderBotReplace();
+          shaderStr += botReplace;
           break;
         case "smoothadd":
           shaderStr += drawShaderFactorSmooth();
-          shaderStr += drawShaderBotAdd();
+          shaderStr += botAdd;
           break;
       }
     }
     // Configure the displayed cursor.
     configureCursorDisplay();
-    // Substitute in the correct colour code.
+    // Substitute in the correct colour code (and, for the MRT case, which group's output/
+    // current-state variable the brush override targets).
     shaderStr = selectColourspecInShaderStr(shaderStr);
+    if (isMRT) {
+      const group = speciesToGroupInd(options.whatToDraw);
+      shaderStr = shaderStr
+        .replaceAll(/\bFRAGCOLOR\b/g, group === 0 ? "fragColor0" : "fragColor1")
+        .replaceAll(/\bUVWQGROUP\b/g, group === 0 ? "uvwq" : "uvwq2");
+    }
     shaderStr = replaceMINXMINY(shaderStr);
     assignFragmentShader(drawMaterial, shaderStr);
+    drawMaterial.glslVersion = isMRT ? THREE.GLSL3 : null;
     drawMaterial.needsUpdate = true;
   }
 
   function setDisplayColourAndType() {
+    // Must run before anything below that could reference an Int(...) expression - see
+    // reconcileGlobalIntegrals().
+    reconcileGlobalIntegrals();
     colourmap = getColours(options.colourmap);
     if (options.flippedColourmap) {
       colourmap.reverse();
@@ -4080,7 +4135,13 @@ async function VisualPDE(url) {
     uniforms.colour3.value = new THREE.Vector4(...colourmap[2]);
     uniforms.colour4.value = new THREE.Vector4(...colourmap[3]);
     uniforms.colour5.value = new THREE.Vector4(...colourmap[4]);
-    let shader = kineticUniformsForShader() + fiveColourDisplayTop();
+    // fiveColourDisplayTopMRT/overlayShaderMRT (>4 species) just add extra input sampler(s)
+    // + group-1 locals so the overlay expression can reference species 5-8 - still
+    // single-output, so no glslVersion toggle is needed here.
+    const isMRT = numGroups(Number(options.numSpecies)) > 1;
+    let shader =
+      kineticUniformsForShader() +
+      (isMRT ? fiveColourDisplayTopMRT() : fiveColourDisplayTop());
     if (options.emboss) {
       shader += embossShader();
       setEmbossUniforms();
@@ -4090,7 +4151,7 @@ async function VisualPDE(url) {
       setContourUniforms();
     }
     if (options.overlay) {
-      shader += overlayShader().replaceAll(
+      shader += (isMRT ? overlayShaderMRT() : overlayShader()).replaceAll(
         "OVERLAYEXPR",
         parseShaderString(options.overlayExpr),
       );
@@ -4131,12 +4192,26 @@ async function VisualPDE(url) {
 
     simDomain.material = drawMaterial;
     // We'll draw onto all history terms. We'll do 1->0 then 2->1 etc, then cycle.
-    for (let ind = 1; ind < simTextures.length; ind++) {
-      uniforms.textureSource.value = simTextures[ind].texture;
-      renderer.setRenderTarget(simTextures[ind - 1]);
-      renderer.render(simScene, simCamera);
+    if (numGroups(Number(options.numSpecies)) > 1) {
+      // drawMaterial's MRT shader (drawShaderTopMRT, Stage 7) always passes both groups'
+      // current state through, overriding only the one drawn-on channel - so both
+      // textureSource (group 0) and textureSourceGroup1 (group 1) need to be bound from the
+      // same slot regardless of which group is actually being drawn on.
+      for (let ind = 1; ind < mrtSimTextures.length; ind++) {
+        uniforms.textureSource.value = mrtSimTextures[ind].texture[0];
+        uniforms.textureSourceGroup1.value = mrtSimTextures[ind].texture[1];
+        renderer.setRenderTarget(mrtSimTextures[ind - 1]);
+        renderer.render(simScene, simCamera);
+      }
+      mrtSimTextures.rotate(-1);
+    } else {
+      for (let ind = 1; ind < simTextures.length; ind++) {
+        uniforms.textureSource.value = simTextures[ind].texture;
+        renderer.setRenderTarget(simTextures[ind - 1]);
+        renderer.render(simScene, simCamera);
+      }
+      simTextures.rotate(-1);
     }
-    simTextures.rotate(-1);
   }
 
   function timestep() {
@@ -4149,70 +4224,149 @@ async function VisualPDE(url) {
     switch (options.timesteppingScheme) {
       case "Euler":
         simDomain.material = simMaterials["FE"];
-        uniforms.textureSource.value = simTextures[1].texture;
-        uniforms.textureSource1.value = simTextures[2].texture;
-        uniforms.dt.value = options.dt;
-        renderer.setRenderTarget(simTextures[0]);
-        renderer.render(simScene, simCamera);
-        simTextures.rotate(-1);
+        if (numGroups(Number(options.numSpecies)) > 1) {
+          // The real 8-species state lives in mrtSimTextures (each slot's two
+          // attachments are group 0/group 1 respectively) - simTextures is untouched and
+          // unused once numGroups>1, matching every other Stage 3-7 MRT code path.
+          uniforms.textureSource.value = mrtSimTextures[1].texture[0];
+          uniforms.textureSourceGroup1.value = mrtSimTextures[1].texture[1];
+          uniforms.textureSource1.value = mrtSimTextures[2].texture[0];
+          uniforms.dt.value = options.dt;
+          renderer.setRenderTarget(mrtSimTextures[0]);
+          renderer.render(simScene, simCamera);
+          mrtSimTextures.rotate(-1);
+        } else {
+          uniforms.textureSource.value = simTextures[1].texture;
+          uniforms.textureSource1.value = simTextures[2].texture;
+          uniforms.dt.value = options.dt;
+          renderer.setRenderTarget(simTextures[0]);
+          renderer.render(simScene, simCamera);
+          simTextures.rotate(-1);
+        }
         uniforms.t.value += options.dt;
         break;
       case "AB2":
         simDomain.material = simMaterials["AB2"];
-        uniforms.textureSource.value = simTextures[1].texture;
-        uniforms.textureSource1.value = simTextures[2].texture;
-        uniforms.dt.value = options.dt;
-        renderer.setRenderTarget(simTextures[0]);
-        renderer.render(simScene, simCamera);
-        simTextures.rotate(-1);
+        if (numGroups(Number(options.numSpecies)) > 1) {
+          uniforms.textureSource.value = mrtSimTextures[1].texture[0];
+          uniforms.textureSourceGroup1.value = mrtSimTextures[1].texture[1];
+          uniforms.textureSource1.value = mrtSimTextures[2].texture[0];
+          uniforms.textureSource1Group1.value = mrtSimTextures[2].texture[1];
+          uniforms.dt.value = options.dt;
+          renderer.setRenderTarget(mrtSimTextures[0]);
+          renderer.render(simScene, simCamera);
+          mrtSimTextures.rotate(-1);
+        } else {
+          uniforms.textureSource.value = simTextures[1].texture;
+          uniforms.textureSource1.value = simTextures[2].texture;
+          uniforms.dt.value = options.dt;
+          renderer.setRenderTarget(simTextures[0]);
+          renderer.render(simScene, simCamera);
+          simTextures.rotate(-1);
+        }
         uniforms.t.value += options.dt;
         break;
       case "Mid":
-        // We'll use simTextures as [result, previous, k1].
-        // Compute k1 in [2]. Mid1
-        simDomain.material = simMaterials["Mid1"];
-        uniforms.textureSource.value = simTextures[1].texture;
-        renderer.setRenderTarget(simTextures[2]);
-        renderer.render(simScene, simCamera);
+        if (numGroups(Number(options.numSpecies)) > 1) {
+          // We'll use mrtSimTextures as [result, previous, k1].
+          // Compute k1 in [2]. Mid1
+          simDomain.material = simMaterials["Mid1"];
+          uniforms.textureSource.value = mrtSimTextures[1].texture[0];
+          uniforms.textureSourceGroup1.value = mrtSimTextures[1].texture[1];
+          renderer.setRenderTarget(mrtSimTextures[2]);
+          renderer.render(simScene, simCamera);
 
-        // Compute the new value in [0] by computing k2 using k1. Mid2
-        simDomain.material = simMaterials["Mid2"];
-        uniforms.textureSource1.value = simTextures[2].texture;
-        uniforms.t.value += 0.5 * options.dt;
-        renderer.setRenderTarget(simTextures[0]);
-        renderer.render(simScene, simCamera);
-        simTextures.rotate(-1);
-        uniforms.t.value += 0.5 * options.dt;
+          // Compute the new value in [0] by computing k2 using k1. Mid2
+          simDomain.material = simMaterials["Mid2"];
+          uniforms.textureSource1.value = mrtSimTextures[2].texture[0];
+          uniforms.textureSource1Group1.value = mrtSimTextures[2].texture[1];
+          uniforms.t.value += 0.5 * options.dt;
+          renderer.setRenderTarget(mrtSimTextures[0]);
+          renderer.render(simScene, simCamera);
+          mrtSimTextures.rotate(-1);
+          uniforms.t.value += 0.5 * options.dt;
+        } else {
+          // We'll use simTextures as [result, previous, k1].
+          // Compute k1 in [2]. Mid1
+          simDomain.material = simMaterials["Mid1"];
+          uniforms.textureSource.value = simTextures[1].texture;
+          renderer.setRenderTarget(simTextures[2]);
+          renderer.render(simScene, simCamera);
+
+          // Compute the new value in [0] by computing k2 using k1. Mid2
+          simDomain.material = simMaterials["Mid2"];
+          uniforms.textureSource1.value = simTextures[2].texture;
+          uniforms.t.value += 0.5 * options.dt;
+          renderer.setRenderTarget(simTextures[0]);
+          renderer.render(simScene, simCamera);
+          simTextures.rotate(-1);
+          uniforms.t.value += 0.5 * options.dt;
+        }
         break;
       case "RK4":
-        // We'll use simTextures as [result, previous, k1, k2, k3].
+        if (numGroups(Number(options.numSpecies)) > 1) {
+          // We'll use mrtSimTextures as [result, previous, k1, k2, k3].
 
-        // Compute k1 in [2]. RK41
-        simDomain.material = simMaterials["RK41"];
-        uniforms.textureSource.value = simTextures[1].texture;
-        renderer.setRenderTarget(simTextures[2]);
-        renderer.render(simScene, simCamera);
+          // Compute k1 in [2]. RK41
+          simDomain.material = simMaterials["RK41"];
+          uniforms.textureSource.value = mrtSimTextures[1].texture[0];
+          uniforms.textureSourceGroup1.value = mrtSimTextures[1].texture[1];
+          renderer.setRenderTarget(mrtSimTextures[2]);
+          renderer.render(simScene, simCamera);
 
-        // Compute k2 in [3] using previous [1] and k1 [2]. RK42
-        simDomain.material = simMaterials["RK42"];
-        uniforms.textureSource1.value = simTextures[2].texture;
-        uniforms.t.value += 0.5 * options.dt;
-        renderer.setRenderTarget(simTextures[3]);
-        renderer.render(simScene, simCamera);
+          // Compute k2 in [3] using previous [1] and k1 [2]. RK42
+          simDomain.material = simMaterials["RK42"];
+          uniforms.textureSource1.value = mrtSimTextures[2].texture[0];
+          uniforms.textureSource1Group1.value = mrtSimTextures[2].texture[1];
+          uniforms.t.value += 0.5 * options.dt;
+          renderer.setRenderTarget(mrtSimTextures[3]);
+          renderer.render(simScene, simCamera);
 
-        // Compute k3 in [4] using previous [1] and k2 [3]. RK43
-        simDomain.material = simMaterials["RK43"];
-        uniforms.textureSource2.value = simTextures[3].texture;
-        renderer.setRenderTarget(simTextures[4]);
-        renderer.render(simScene, simCamera);
+          // Compute k3 in [4] using previous [1] and k2 [3]. RK43
+          simDomain.material = simMaterials["RK43"];
+          uniforms.textureSource2.value = mrtSimTextures[3].texture[0];
+          uniforms.textureSource2Group1.value = mrtSimTextures[3].texture[1];
+          renderer.setRenderTarget(mrtSimTextures[4]);
+          renderer.render(simScene, simCamera);
 
-        // Compute the new value in [0] by computing k4 using k1, k2, k3. RK44
-        simDomain.material = simMaterials["RK44"];
-        uniforms.textureSource3.value = simTextures[4].texture;
-        uniforms.t.value += 0.5 * options.dt;
-        renderer.setRenderTarget(simTextures[0]);
-        renderer.render(simScene, simCamera);
-        simTextures.rotate(-1);
+          // Compute the new value in [0] by computing k4 using k1, k2, k3. RK44
+          simDomain.material = simMaterials["RK44"];
+          uniforms.textureSource3.value = mrtSimTextures[4].texture[0];
+          uniforms.textureSource3Group1.value = mrtSimTextures[4].texture[1];
+          uniforms.t.value += 0.5 * options.dt;
+          renderer.setRenderTarget(mrtSimTextures[0]);
+          renderer.render(simScene, simCamera);
+          mrtSimTextures.rotate(-1);
+        } else {
+          // We'll use simTextures as [result, previous, k1, k2, k3].
+
+          // Compute k1 in [2]. RK41
+          simDomain.material = simMaterials["RK41"];
+          uniforms.textureSource.value = simTextures[1].texture;
+          renderer.setRenderTarget(simTextures[2]);
+          renderer.render(simScene, simCamera);
+
+          // Compute k2 in [3] using previous [1] and k1 [2]. RK42
+          simDomain.material = simMaterials["RK42"];
+          uniforms.textureSource1.value = simTextures[2].texture;
+          uniforms.t.value += 0.5 * options.dt;
+          renderer.setRenderTarget(simTextures[3]);
+          renderer.render(simScene, simCamera);
+
+          // Compute k3 in [4] using previous [1] and k2 [3]. RK43
+          simDomain.material = simMaterials["RK43"];
+          uniforms.textureSource2.value = simTextures[3].texture;
+          renderer.setRenderTarget(simTextures[4]);
+          renderer.render(simScene, simCamera);
+
+          // Compute the new value in [0] by computing k4 using k1, k2, k3. RK44
+          simDomain.material = simMaterials["RK44"];
+          uniforms.textureSource3.value = simTextures[4].texture;
+          uniforms.t.value += 0.5 * options.dt;
+          renderer.setRenderTarget(simTextures[0]);
+          renderer.render(simScene, simCamera);
+          simTextures.rotate(-1);
+        }
         break;
     }
   }
@@ -4220,13 +4374,30 @@ async function VisualPDE(url) {
   function enforceDirichlet() {
     // Enforce any Dirichlet boundary conditions.
     simDomain.material = dirichletMaterial;
-    // We'll do 1->0 then 2->1 etc, then cycle.
-    for (let ind = 1; ind < simTextures.length; ind++) {
-      uniforms.textureSource.value = simTextures[ind].texture;
-      renderer.setRenderTarget(simTextures[ind - 1]);
-      renderer.render(simScene, simCamera);
+    // The real 8-species state lives in mrtSimTextures once numGroups>1 (matching every
+    // other Stage 3+ MRT code path) - dirichletMaterial's shader/glslVersion are already
+    // toggled to the MRT-capable variant in setRDEquations() when that's the case (Stage
+    // 11.5 of the 8-species upgrade; previously this always cascaded over the unused
+    // simTextures regardless, so Dirichlet BCs silently had no effect on any species once
+    // numSpecies>4).
+    if (numGroups(Number(options.numSpecies)) > 1) {
+      // We'll do 1->0 then 2->1 etc, then cycle.
+      for (let ind = 1; ind < mrtSimTextures.length; ind++) {
+        uniforms.textureSource.value = mrtSimTextures[ind].texture[0];
+        uniforms.textureSourceGroup1.value = mrtSimTextures[ind].texture[1];
+        renderer.setRenderTarget(mrtSimTextures[ind - 1]);
+        renderer.render(simScene, simCamera);
+      }
+      mrtSimTextures.rotate(-1);
+    } else {
+      // We'll do 1->0 then 2->1 etc, then cycle.
+      for (let ind = 1; ind < simTextures.length; ind++) {
+        uniforms.textureSource.value = simTextures[ind].texture;
+        renderer.setRenderTarget(simTextures[ind - 1]);
+        renderer.render(simScene, simCamera);
+      }
+      simTextures.rotate(-1);
     }
-    simTextures.rotate(-1);
   }
 
   function render(isResetting) {
@@ -4405,7 +4576,12 @@ async function VisualPDE(url) {
     ) {
       bufferFilled = false;
       simDomain.material = probeMaterial;
-      uniforms.textureSource.value = simTextures[1].texture;
+      if (numGroups(Number(options.numSpecies)) > 1) {
+        uniforms.textureSource.value = mrtSimTextures[1].texture[0];
+        uniforms.textureSourceGroup1.value = mrtSimTextures[1].texture[1];
+      } else {
+        uniforms.textureSource.value = simTextures[1].texture;
+      }
       renderer.setRenderTarget(postTexture);
       renderer.render(simScene, simCamera);
       fillBuffer();
@@ -4429,7 +4605,17 @@ async function VisualPDE(url) {
 
   function postprocess(updateProbeXY = false) {
     simDomain.material = postMaterial;
-    uniforms.textureSource.value = simTextures[1].texture;
+    // The real 8-species state lives in mrtSimTextures once numGroups>1. textureSourceGroup1
+    // is bound here (used by both postMaterial's computeDisplayFunShaderMidMRT and, via the
+    // render below, probeMaterial's probeShaderMRT - both need to read group 1's state) and
+    // reused again below for displayMaterial's overlayShaderMRT.
+    const isMRT = numGroups(Number(options.numSpecies)) > 1;
+    if (isMRT) {
+      uniforms.textureSource.value = mrtSimTextures[1].texture[0];
+      uniforms.textureSourceGroup1.value = mrtSimTextures[1].texture[1];
+    } else {
+      uniforms.textureSource.value = simTextures[1].texture;
+    }
     renderer.setRenderTarget(postTexture);
     renderer.render(simScene, simCamera);
     // If we're probing, probe the simulation texture.
@@ -4460,7 +4646,13 @@ async function VisualPDE(url) {
     }
     uniforms.textureSource.value = postTexture.texture;
     bufferFilled = false;
-    uniforms.textureSource1.value = simTextures[1].texture;
+    if (isMRT) {
+      uniforms.textureSource1.value = mrtSimTextures[1].texture[0];
+      // textureSourceGroup1 stays bound to mrtSimTextures[1].texture[1] from above, reused
+      // as-is for the overlay pass.
+    } else {
+      uniforms.textureSource1.value = simTextures[1].texture;
+    }
   }
 
   function onDocumentPointerDown(event) {
@@ -4548,17 +4740,140 @@ async function VisualPDE(url) {
     return 0 <= x && x <= 1 && 0 <= y && y <= 1;
   }
 
+  /**
+   * Creates the 5-slot ping-pong render target array used by a single texture group (one
+   * texture holding up to CHANNELS_PER_GROUP species in its r,g,b,a channels): a "current"
+   * target plus 4 history/stage-buffer clones, which between them cover every timestepping
+   * scheme's needs (Forward Euler needs 2, RK4 needs all 5). Factored out so the always-
+   * present group 0 (simTextures) and, once implemented, any future >8-species upgrade's
+   * additional groups can all share this logic.
+   * @param {number} width
+   * @param {number} height
+   * @param {Object} opts - THREE.WebGLRenderTarget options (format/type/filtering).
+   * @returns {THREE.WebGLRenderTarget[]} 5 render targets; entries 1-4 are clones of entry 0.
+   */
+  function createGroupRenderTargets(width, height, opts) {
+    const targets = [new THREE.WebGLRenderTarget(width, height, opts)];
+    targets.push(targets[0].clone());
+    targets.push(targets[0].clone());
+    targets.push(targets[0].clone());
+    targets.push(targets[0].clone());
+    return targets;
+  }
+
+  /**
+   * MRT counterpart of createGroupRenderTargets, used only once numGroups(options.numSpecies)>1.
+   * Each slot is a single THREE.WebGLMultipleRenderTargets with one colour attachment per
+   * texture group, so one render call can update every group's species at once. Group g's
+   * texture for ping-pong slot k is mrtSimTextures[k].texture[g].
+   * @param {number} width
+   * @param {number} height
+   * @param {Object} opts
+   * @param {number} groups - Number of texture groups (colour attachments), i.e. numGroups(numSpecies).
+   * @returns {THREE.WebGLMultipleRenderTargets[]} 5 MRT render targets.
+   */
+  function createMRTRenderTargets(width, height, opts, groups) {
+    const targets = [
+      new THREE.WebGLMultipleRenderTargets(width, height, groups, opts),
+    ];
+    targets.push(targets[0].clone());
+    targets.push(targets[0].clone());
+    targets.push(targets[0].clone());
+    targets.push(targets[0].clone());
+    return targets;
+  }
+
+  /**
+   * Allocates mrtSimTextures if numSpecies>4 and the right number of groups isn't already
+   * allocated; disposes them if numSpecies has dropped back to <=4. A no-op otherwise, so
+   * it's safe to call on every numSpecies change. Must run before resetSim()/clearTextures()
+   * so the (de)allocated targets are in place before anything renders into them.
+   */
+  function ensureMRTRenderTargets() {
+    const groups = numGroups(options.numSpecies);
+    if (groups <= 1) {
+      disposeMRTRenderTargets();
+      return;
+    }
+    if (
+      mrtSimTextures.length > 0 &&
+      mrtSimTextures[0].texture.length === groups
+    ) {
+      return;
+    }
+    disposeMRTRenderTargets();
+    mrtSimTextures.push(
+      ...createMRTRenderTargets(
+        options.maxDisc,
+        options.maxDisc,
+        simTextureOpts,
+        groups,
+      ),
+    );
+    // Match simTextures' periodic wrapping (set on every attachment of every slot).
+    mrtSimTextures.forEach((mrtTex) => {
+      mrtTex.texture.forEach((tex) => {
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+      });
+    });
+  }
+
+  /**
+   * Frees the GPU resources backing mrtSimTextures (THREE render targets are not garbage
+   * collected automatically) and empties the array. Safe to call when nothing is allocated.
+   */
+  function disposeMRTRenderTargets() {
+    mrtSimTextures.forEach((tex) => tex.dispose());
+    mrtSimTextures.length = 0;
+  }
+
   function clearTextures() {
     setRenderSizeToDisc();
+    const isMRT = numGroups(Number(options.numSpecies)) > 1;
+    // If restoring a checkpoint captured/loaded while numGroups was 1 (no group-1 data) but
+    // numSpecies is now >4, species 5-8 restore to zero rather than being left with whatever
+    // a single-output material would otherwise leave in that attachment (undefined/stale
+    // data) - created fresh each time (a reset-to-checkpoint is an explicit, infrequent user
+    // action, not a per-frame one) and disposed right after use, below.
+    let tempZeroGroup1Tex;
     if (checkpointExists && options.resetFromCheckpoints) {
-      simDomain.material = checkpointMaterial;
+      if (isMRT) {
+        // checkpointMaterial (plain MeshBasicMaterial) can only sample one texture/write
+        // one output - use checkpointMaterialMRT (Stage 11.5 of the 8-species upgrade)
+        // instead, which samples both checkpoint textures and writes both attachments.
+        if (checkpointTextureGroup1 == null) {
+          tempZeroGroup1Tex = new THREE.DataTexture(
+            new Float32Array(
+              checkpointTexture.image.width *
+                checkpointTexture.image.height *
+                4,
+            ),
+            checkpointTexture.image.width,
+            checkpointTexture.image.height,
+            THREE.RGBAFormat,
+            THREE.FloatType,
+          );
+          tempZeroGroup1Tex.needsUpdate = true;
+        }
+        checkpointMaterialMRT.uniforms.textureSource.value = checkpointTexture;
+        checkpointMaterialMRT.uniforms.textureSourceGroup1.value =
+          checkpointTextureGroup1 ?? tempZeroGroup1Tex;
+        simDomain.material = checkpointMaterialMRT;
+      } else {
+        simDomain.material = checkpointMaterial;
+      }
     } else {
       simDomain.material = clearMaterial;
     }
-    simTextures.forEach((tex) => {
+    // The real 8-species state lives in mrtSimTextures once numGroups>1 (see timestep()'s
+    // "Euler" case) - clearMaterial's MRT shader (Stage 7) writes both attachments in one
+    // render call per slot.
+    (isMRT ? mrtSimTextures : simTextures).forEach((tex) => {
       renderer.setRenderTarget(tex);
       renderer.render(simScene, simCamera);
     });
+    tempZeroGroup1Tex?.dispose();
     setDefaultRenderSize();
     render();
   }
@@ -4624,6 +4939,51 @@ async function VisualPDE(url) {
     // Prepare the QFUN string.
     out += "float QFUN = " + parseShaderString(options.reactionStr_4) + ";\n";
 
+    // Species 5-8, only relevant once numGroups(numSpecies)>1 (numSpecies>4). Kept
+    // separate from the 4 hardcoded lines above (rather than folding everything into one
+    // generalized loop) so the numSpecies<=4 output is provably unchanged - this loop's
+    // range is empty whenever numSpecies<=4.
+    const numSpecies = Number(options.numSpecies);
+    for (let i = 4; i < numSpecies; i++) {
+      out +=
+        "float " +
+        reactionTokenOfSpecies(i) +
+        " = " +
+        parseShaderString(options["reactionStr_" + (i + 1)]) +
+        ";\n";
+    }
+
+    return out;
+  }
+
+  // Shared per-coefficient body extracted from parseNormalDiffusionStrings/
+  // parseCrossDiffusionStrings' tuple loops (unchanged logic, just factored out so the new
+  // species-5-8/cross-group loops below can reuse it without duplicating it).
+  function diffusionTupleToShader(str, label) {
+    let out = "";
+    let stry;
+    // Check if we have a separate y diffusion coefficient.
+    if (str.includes(";")) {
+      let parts = str.split(";").filter((x) => x);
+      str = parts[0];
+      if (parts.length > 1 && options.dimension > 1) {
+        stry = parts[1];
+      }
+    }
+    // Add in the x diffusion coefficient.
+    out += nonConstantDiffusionEvaluateInSpaceStr(
+      parseShaderString(str) + ";\n",
+      label + "x",
+    );
+    // Add in the y diffusion coefficients.
+    if (!stry) {
+      out += setEqualYDiffusionCoefficientsShader(label);
+    } else {
+      out += nonConstantDiffusionEvaluateInSpaceStr(
+        parseShaderString(stry) + ";\n",
+        label + "y",
+      );
+    }
     return out;
   }
 
@@ -4639,29 +4999,19 @@ async function VisualPDE(url) {
 
     // Loop over the tuples.
     for (let [str, label] of tuples) {
-      let stry;
-      // Check if we have a separate y diffusion coefficient.
-      if (str.includes(";")) {
-        let parts = str.split(";").filter((x) => x);
-        str = parts[0];
-        if (parts.length > 1 && options.dimension > 1) {
-          stry = parts[1];
-        }
-      }
-      // Add in the x diffusion coefficient.
-      out += nonConstantDiffusionEvaluateInSpaceStr(
-        parseShaderString(str) + ";\n",
-        label + "x",
+      out += diffusionTupleToShader(str, label);
+    }
+
+    // Species 5-8 self-diffusion, only relevant once numGroups(numSpecies)>1 (numSpecies>4).
+    // Kept separate from the tuples array above (rather than folding into one generalized
+    // loop) so the numSpecies<=4 output is provably unchanged - this loop's range is empty
+    // whenever numSpecies<=4.
+    const numSpecies = Number(options.numSpecies);
+    for (let i = 4; i < numSpecies; i++) {
+      out += diffusionTupleToShader(
+        options["diffusionStr_" + (i + 1) + "_" + (i + 1)],
+        diffusionLabel(i, i),
       );
-      // Add in the y diffusion coefficients.
-      if (!stry) {
-        out += setEqualYDiffusionCoefficientsShader(label);
-      } else {
-        out += nonConstantDiffusionEvaluateInSpaceStr(
-          parseShaderString(stry) + ";\n",
-          label + "y",
-        );
-      }
     }
 
     return out;
@@ -4698,27 +5048,21 @@ async function VisualPDE(url) {
 
     // Loop over the tuples.
     for (let [str, label] of tuples) {
-      let stry;
-      // Check if we have a separate y diffusion coefficient.
-      if (str.includes(";")) {
-        let parts = str.split(";").filter((x) => x);
-        str = parts[0];
-        if (parts.length > 1 && options.dimension > 1) {
-          stry = parts[1];
-        }
-      }
-      // Add in the x diffusion coefficient.
-      out += nonConstantDiffusionEvaluateInSpaceStr(
-        parseShaderString(str) + ";\n",
-        label + "x",
-      );
-      // Add in the y diffusion coefficients.
-      if (!stry) {
-        out += setEqualYDiffusionCoefficientsShader(label);
-      } else {
-        out += nonConstantDiffusionEvaluateInSpaceStr(
-          parseShaderString(stry) + ";\n",
-          label + "y",
+      out += diffusionTupleToShader(str, label);
+    }
+
+    // Cross-diffusion terms involving species 5-8 (any pair where at least one index is
+    // >=4 - pairs with both indices <4 are already covered by the tuples array above), only
+    // relevant once numGroups(numSpecies)>1. Every species can cross-diffuse with every
+    // other regardless of group, so this covers the full N x N matrix minus the diagonal
+    // and minus the <=4-species block handled above. Empty whenever numSpecies<=4.
+    const numSpecies = Number(options.numSpecies);
+    for (let i = 0; i < numSpecies; i++) {
+      for (let j = 0; j < numSpecies; j++) {
+        if (i === j || (i < 4 && j < 4)) continue;
+        out += diffusionTupleToShader(
+          options["diffusionStr_" + (i + 1) + "_" + (j + 1)],
+          diffusionLabel(i, j),
         );
       }
     }
@@ -4767,10 +5111,56 @@ async function VisualPDE(url) {
     return out;
   }
 
-  function parseShaderString(str) {
+  function parseShaderString(str, allowIntegrals = true) {
     // Parse a string into valid GLSL by replacing u,v,^, and integers.
     // Pad the string.
     str = " " + str + " ";
+
+    // Substitute user-defined expressions (raw text macros, not GLSL quantities) before any
+    // other parsing, so everything below only ever sees expression-free text.
+    // expandedExpressionDefs is kept up to date by refreshExpressionExpansions(), called once
+    // per shader rebuild in updateShaders().
+    Object.keys(expandedExpressionDefs).forEach((name) => {
+      str = str.replaceAll(
+        new RegExp("\\b" + name + "\\b", "g"),
+        "(" + expandedExpressionDefs[name] + ")",
+      );
+    });
+
+    // Replace each Int(expression) with the globalIntegralValueN uniform holding its
+    // current value, N being whichever of the (at most 4) slots reconcileGlobalIntegrals()
+    // has assigned that expression to. reconcileGlobalIntegrals() always runs earlier in
+    // the same shader-rebuild call than parseShaderString(), so the slot should always be
+    // found; fall back to "0.0" (mirroring expandDependentExpressions' degrade-to-"0.0" for
+    // cyclic expressions) if it somehow isn't, e.g. a slot that overflowed the max of 4. Must
+    // run after macro substitution above - reconcileGlobalIntegrals() scans every field's raw
+    // text (including a macro's own definition in options.expressions) for Int(...), so a
+    // macro like "myMacro = u + Int(u)" already gets "u" assigned a slot; if this ran before
+    // macro substitution, an Int(...) that only exists *inside* a macro's definition (only
+    // appearing here once "myMacro" gets expanded to "(u + Int(u))") would never be resolved,
+    // reaching the shader compiler as literal, invalid "Int(u)" text. Still runs before
+    // anything below that could otherwise mangle the raw text inside "Int(...)" (e.g. species
+    // substitution) - the lookup here needs to see the same canonical text
+    // reconcileGlobalIntegrals() saw. The result is a bare identifier, immune to every later
+    // substitution pass.
+    //
+    // allowIntegrals is false only for initial conditions (setClearShader) - domain integrals
+    // aren't computed until the simulation is actually running (they're derived from the
+    // current state, which doesn't exist yet at t=0, before the very first timestep), so
+    // there's no meaningful value Int(...) could resolve to there. Rather than let that reach
+    // the shader compiler as a reference to a uniform initCond's shader never declares
+    // (a confusing "undefined identifier" GLSL compile error), degrade straight to "0.0" and
+    // explain why via throwError.
+    str = replaceIntCalls(str, (expr) => {
+      if (!allowIntegrals) {
+        throwError(
+          "Int(...) can't be used in initial conditions, since domain integrals haven't been computed yet when the simulation starts. Use it in a reaction/forcing term or another field instead - initial conditions will be treated as 0 here.",
+        );
+        return "0.0";
+      }
+      const ind = options.globalIntExprs.indexOf(expr);
+      return ind == -1 ? "0.0" : "globalIntegralValue" + (ind + 1);
+    });
 
     // Perform a syntax check.
     if (!isValidSyntax(str) || isEmptyString(str)) {
@@ -4793,8 +5183,12 @@ async function VisualPDE(url) {
         "g",
       ),
       function (m, d1, d2, d3) {
+        const textureUniform =
+          speciesToGroupInd(d1) === 0 ? "textureSource" : "textureSourceGroup1";
         return (
-          "texture(textureSource, vec2((" +
+          "texture(" +
+          textureUniform +
+          ", vec2((" +
           d2 +
           "-MINX)/L_x,(" +
           d3 +
@@ -4812,29 +5206,39 @@ async function VisualPDE(url) {
         return "((" + p1 + ")" + ("*(" + p1 + ")").repeat(exp - 1) + ")";
       } else return "safepow(" + p1 + "," + p2 + ")";
     });
-    // Replace species with uvwq.[rgba].
+    // Replace species with uvwq.[rgba] (group 0) or uvwq2.[rgba] (group 1, species 5-8).
     str = str.replaceAll(
       RegExp("\\b(" + anySpeciesRegexStrs[0] + ")\\b", "g"),
       function (m, d) {
-        return "uvwq." + speciesToChannelChar(d);
+        return stencilPrefixForSpecies(d) + "." + speciesToChannelChar(d);
       },
     );
 
-    // Replace species_x, species_y etc with uvwqX.r and uvwqY.r, etc.
+    // Replace species_x, species_y etc with uvwqX.r/uvwq2X.r and uvwqY.r/uvwq2Y.r, etc.
     // Allow for specifying forward or backward difference.
     str = str.replaceAll(
       RegExp("\\b(" + anySpeciesRegexStrs[0] + ")_([xy][fb]?2?)\\b", "g"),
       function (m, d1, d2) {
         if (d2.includes("2")) d2 = d2.slice(0, -1).repeat(2);
-        return "uvwq" + d2.toUpperCase() + "." + speciesToChannelChar(d1);
+        return (
+          stencilPrefixForSpecies(d1) +
+          d2.toUpperCase() +
+          "." +
+          speciesToChannelChar(d1)
+        );
       },
     );
 
-    // Replace species_xx, species_yy etc with uvwqXX.r and uvwqYY.r, etc.
+    // Replace species_xx, species_yy etc with uvwqXX.r/uvwq2XX.r and uvwqYY.r/uvwq2YY.r, etc.
     str = str.replaceAll(
       RegExp("\\b(" + anySpeciesRegexStrs[0] + ")_(xx|yy)\\b", "g"),
       function (m, d1, d2) {
-        return "uvwq" + d2.toUpperCase() + "." + speciesToChannelChar(d1);
+        return (
+          stencilPrefixForSpecies(d1) +
+          d2.toUpperCase() +
+          "." +
+          speciesToChannelChar(d1)
+        );
       },
     );
 
@@ -4857,9 +5261,6 @@ async function VisualPDE(url) {
 
     // Insert MINX and MINY.
     str = replaceMINXMINY(str);
-
-    // Replace 'GlobalInt' with globalIntegralValue, which is a uniform that stores the integral of the quantity.
-    str = str.replaceAll(/\bGlobalInt\b/g, "globalIntegralValue");
 
     return str;
   }
@@ -4895,7 +5296,169 @@ async function VisualPDE(url) {
     return str;
   }
 
+  /**
+   * Builds the Neumann/Ghost/Dirichlet/Robin shader blocks and edge-clamp flags for a given
+   * list of (0-based) species indices, mirroring setRDEquations()'s own group-0 blocks
+   * (which remain untouched, literal code) exactly - same conditions, same order, same
+   * helper functions (robinUpdateShader/ghostUpdateShader/dirichletUpdateShader/
+   * parseRobinRHS/parseDirichletRHS, all already index-generic). Used for species 5-8
+   * (group 1) so group 0's already-correct, byte-for-byte-preserved blocks don't need to be
+   * touched or risk being altered by a shared/generalized loop.
+   * @param {number[]} indices - 0-based species indices to build BCs for (e.g. [4,5,6,7]).
+   * @returns {{neumannShader: string, ghostShader: string, dirichletShader: string, robinShader: string, edgeClampSpeciesH: Object<number,boolean>, edgeClampSpeciesV: Object<number,boolean>}}
+   */
+  function buildBCShadersForIndices(indices) {
+    const BCStrs = indices.map((i) => options["boundaryConditions_" + (i + 1)]);
+    const NStrs = indices.map((i) => options["neumannStr_" + (i + 1)]);
+    const MStrs = indices
+      .map((i) => options["comboStr_" + (i + 1)])
+      .map((s) => s + ";");
+    const DStrs = indices.map((i) => options["dirichletStr_" + (i + 1)]);
+    const RStrs = indices.map((i) => options["robinStr_" + (i + 1)]);
+
+    let neumannShader = "";
+    let ghostShader = "";
+    let dirichletShader = "";
+    let robinShader = "";
+    const edgeClampSpeciesH = {};
+    const edgeClampSpeciesV = {};
+    indices.forEach((i) => {
+      edgeClampSpeciesH[i] = false;
+      edgeClampSpeciesV[i] = false;
+    });
+
+    // Neumann (a special case of Robin).
+    BCStrs.forEach(function (str, localInd) {
+      const ind = indices[localInd];
+      if (str == "neumann") {
+        edgeClampSpeciesH[ind] = true;
+        edgeClampSpeciesV[ind] = true;
+        neumannShader += parseRobinRHS(NStrs[localInd], listOfSpecies[ind]);
+        if (!options.domainViaIndicatorFun) {
+          neumannShader += robinUpdateShader(ind);
+        } else {
+          neumannShader += robinUpdateShaderCustomDomain(ind);
+        }
+      } else if (str == "combo") {
+        [
+          ...MStrs[localInd].matchAll(
+            /(Left|Right|Top|Bottom)\s*:\s*Neumann\s*=([^;]*);/gi,
+          ),
+        ].forEach(function (m) {
+          const side = m[1][0].toUpperCase();
+          neumannShader += parseRobinRHS(m[2], listOfSpecies[ind], side);
+          neumannShader += robinUpdateShader(ind, side);
+          if (["L", "R"].includes(side)) edgeClampSpeciesH[ind] = true;
+          if (["T", "B"].includes(side)) edgeClampSpeciesV[ind] = true;
+        });
+      }
+    });
+
+    // Ghost.
+    BCStrs.forEach(function (str, localInd) {
+      const ind = indices[localInd];
+      if (str == "combo") {
+        [
+          ...MStrs[localInd].matchAll(
+            /(Left|Right|Top|Bottom)\s*:\s*Ghost\s*=([^;]*);/gi,
+          ),
+        ].forEach(function (m) {
+          const side = m[1][0].toUpperCase();
+          ghostShader += ghostUpdateShader(ind, side, parseShaderString(m[2]));
+          if (["L", "R"].includes(side)) edgeClampSpeciesH[ind] = true;
+          if (["T", "B"].includes(side)) edgeClampSpeciesV[ind] = true;
+        });
+      }
+    });
+
+    // Dirichlet.
+    BCStrs.forEach(function (str, localInd) {
+      const ind = indices[localInd];
+      if (str == "dirichlet") {
+        edgeClampSpeciesH[ind] = true;
+        edgeClampSpeciesV[ind] = true;
+        if (!options.domainViaIndicatorFun) {
+          dirichletShader += parseDirichletRHS(
+            DStrs[localInd],
+            listOfSpecies[ind],
+          );
+          dirichletShader += dirichletUpdateShader(ind);
+        } else {
+          let baseStr = RDShaderDirichletIndicatorFun().replace(
+            /indicatorFun/g,
+            parseShaderString(getModifiedDomainIndicatorFun()),
+          );
+          dirichletShader +=
+            selectSpeciesInShaderStr(baseStr, listOfSpecies[ind]) +
+            parseShaderString(DStrs[localInd]) +
+            ";\n}\n";
+        }
+      } else if (str == "combo") {
+        [
+          ...MStrs[localInd].matchAll(
+            /(Left|Right|Top|Bottom)\s*:\s*Dirichlet\s*=([^;]*);/gi,
+          ),
+        ].forEach(function (m) {
+          const side = m[1][0].toUpperCase();
+          dirichletShader += parseDirichletRHS(m[2], listOfSpecies[ind], side);
+          dirichletShader += dirichletUpdateShader(ind, side);
+          if (["L", "R"].includes(side)) edgeClampSpeciesH[ind] = true;
+          if (["T", "B"].includes(side)) edgeClampSpeciesV[ind] = true;
+        });
+      } else if (options.domainViaIndicatorFun) {
+        // Zero-out anything outside of the domain if we're using an indicator function.
+        let baseStr = RDShaderDirichletIndicatorFun().replace(
+          /indicatorFun/g,
+          parseShaderString(getModifiedDomainIndicatorFun()),
+        );
+        dirichletShader +=
+          selectSpeciesInShaderStr(baseStr, listOfSpecies[ind]) +
+          "0.0" +
+          ";\n}\n";
+      }
+    });
+
+    // Robin.
+    BCStrs.forEach(function (str, localInd) {
+      const ind = indices[localInd];
+      if (str == "robin") {
+        edgeClampSpeciesH[ind] = true;
+        edgeClampSpeciesV[ind] = true;
+        robinShader += parseRobinRHS(RStrs[localInd], listOfSpecies[ind]);
+        if (!options.domainViaIndicatorFun) {
+          robinShader += robinUpdateShader(ind);
+        } else {
+          robinShader += robinUpdateShaderCustomDomain(ind);
+        }
+      } else if (str == "combo") {
+        [
+          ...MStrs[localInd].matchAll(
+            /(Left|Right|Top|Bottom)\s*:\s*Robin\s*=([^;]*);/gi,
+          ),
+        ].forEach(function (m) {
+          const side = m[1][0].toUpperCase();
+          robinShader += parseRobinRHS(m[2], listOfSpecies[ind], side);
+          robinShader += robinUpdateShader(ind, side);
+          if (["L", "R"].includes(side)) edgeClampSpeciesH[ind] = true;
+          if (["T", "B"].includes(side)) edgeClampSpeciesV[ind] = true;
+        });
+      }
+    });
+
+    return {
+      neumannShader,
+      ghostShader,
+      dirichletShader,
+      robinShader,
+      edgeClampSpeciesH,
+      edgeClampSpeciesV,
+    };
+  }
+
   function setRDEquations() {
+    // Must run before anything below that could reference an Int(...) expression - see
+    // reconcileGlobalIntegrals().
+    reconcileGlobalIntegrals();
     let neumannShader = "";
     let ghostShader = "";
     let dirichletShader = "";
@@ -5062,14 +5625,25 @@ async function VisualPDE(url) {
     let kineticStr = kineticUniformsForShader();
 
     // Choose what sort of update we are doing: normal, or cross-diffusion enabled?
+    // RDShaderUpdateNormal/RDShaderUpdateCross build group 0's (species 1-4 only) RHS -
+    // BCStrs/NStrs/DStrs/MStrs/edgeClampSpeciesH/V above are already hardcoded to species
+    // 1-4 for the same reason. Cap at 4 (found during the Stage 11 audit of the 8-species
+    // upgrade): passing the raw, uncapped numSpecies here left their trailing
+    // switch(numSpecies){case 1..4} unmatched for numSpecies 5-8, so `result` (an `out`
+    // parameter of computeRHS) was never assigned. This diffusionShader/middle/bot is only
+    // ever assigned to a material when numGroups===1 (see the isMRT branch below, which uses
+    // middleMRT/botMRT instead for every scheme once numGroups>1) - the cap keeps this
+    // branch's generated text well-formed regardless of numSpecies even though it's unused
+    // in that case.
+    const numSpeciesGroup0 = Math.min(Number(options.numSpecies), 4);
     diffusionShader = parseNormalDiffusionStrings() + "\n";
     if (options.crossDiffusion) {
       diffusionShader +=
         parseCrossDiffusionStrings() +
         "\n" +
-        RDShaderUpdateCross(Number(options.numSpecies));
+        RDShaderUpdateCross(numSpeciesGroup0);
     } else {
-      diffusionShader += RDShaderUpdateNormal(Number(options.numSpecies));
+      diffusionShader += RDShaderUpdateNormal(numSpeciesGroup0);
     }
 
     // If 2 or more variables are algebraic, check that we don't have any cyclic dependencies.
@@ -5135,8 +5709,13 @@ async function VisualPDE(url) {
       }
     }
 
-    // If v should be algebraic, append this to the normal update shader.
-    if (algebraicV && options.crossDiffusion) {
+    // If v should be algebraic, append this to the normal update shader. Algebraic species no
+    // longer require cross diffusion (relaxed - previously this was gated on
+    // options.crossDiffusion purely to limit the equationTEX display's combinatorics, not for
+    // any numerical reason: RHS.SPECIES already includes whatever diffusion/reaction terms
+    // are actually defined regardless of cross diffusion, and configureOptions() always zeros
+    // an algebraic species' own self-diffusion anyway).
+    if (algebraicV) {
       algebraicShader += selectSpeciesInShaderStr(
         RDShaderAlgebraicSpecies(),
         listOfSpecies[1],
@@ -5144,7 +5723,7 @@ async function VisualPDE(url) {
     }
 
     // If w should be algebraic, append this to the normal update shader.
-    if (algebraicW && options.crossDiffusion) {
+    if (algebraicW) {
       algebraicShader += selectSpeciesInShaderStr(
         RDShaderAlgebraicSpecies(),
         listOfSpecies[2],
@@ -5152,7 +5731,7 @@ async function VisualPDE(url) {
     }
 
     // If q should be algebraic, append this to the normal update shader.
-    if (algebraicQ && options.crossDiffusion) {
+    if (algebraicQ) {
       algebraicShader += selectSpeciesInShaderStr(
         RDShaderAlgebraicSpecies(),
         listOfSpecies[3],
@@ -5160,8 +5739,11 @@ async function VisualPDE(url) {
     }
 
     // Iff the user has entered u_x, u_y etc in a diffusion coefficient, it will be present in
-    // the update shader as uvwxy[XY].[rgba]. If they've done this, warn them and don't update the shader.
-    let match = diffusionShader.match(/\buvwq[XY]\.[rgba]\b/);
+    // the update shader as uvwxy[XY].[rgba] (group 0) or uvwq2[XY].[rgba] (group 1, species
+    // 5-8 - there's no uvwq2X/uvwq2XX declared anywhere, so this must be caught here rather
+    // than left to fail as an undeclared-variable shader compile error).
+    // If they've done this, warn them and don't update the shader.
+    let match = diffusionShader.match(/\buvwq2?[XY]\.[rgba]\b/);
     if (match) {
       throwError(
         "Including derivatives in the diffusion coefficients is not supported. Try casting your PDE in another form.",
@@ -5222,68 +5804,156 @@ async function VisualPDE(url) {
       middle = randNShader() + middle;
     }
     shaderContainsRAND = containsRAND || containsRANDN;
-    shaderContainsGlobalIntegral = /\bglobalIntegralValue\b/.test(middle);
+    shaderContainsGlobalIntegral = /\bglobalIntegralValue[1-4]\b/.test(middle);
     let bot = [dirichletShader, algebraicShader, RDShaderBot()].join(" ");
 
-    let type = "FE";
-    assignFragmentShader(
-      simMaterials[type],
-      replaceMINXMINY(
-        [
-          kineticStr,
-          RDShaderTop(type),
-          middle,
-          insertRates(RDShaderMain(type)),
-          bot,
-        ].join(" "),
-      ),
-    );
+    // MRT (>4-species) path, used by every timestepping scheme once numGroups>1 (Stage 13 of
+    // the 8-species upgrade extended this from Forward-Euler-only to all 8 scheme
+    // materials). Built as an entirely separate diffusionShader/middle/bot from the ones
+    // above: RDShaderUpdateNormalMRT/RDShaderUpdateCrossMRT close a computeRHS with a
+    // doubled signature (18 stencil args, result0/result1) that's incompatible with the
+    // legacy single-group signature `middle`/`bot` above are built around - and `middle`/
+    // `bot` above must stay exactly as they are, since every scheme still uses them
+    // unchanged whenever numGroups===1. middleMRT/botMRT below are scheme-agnostic (the
+    // scheme only affects RDShaderTopMRT(type)/RDShaderMainMRT(type), assembled below) -
+    // parseReactionStrings()/parseNormalDiffusionStrings()/parseCrossDiffusionStrings()
+    // already include species 5-8 and cross-group terms unconditionally (generalized
+    // earlier in this stage), so they're reused here as-is - only the final
+    // "close computeRHS"/shader-wrapper functions differ.
+    let middleMRT, botMRT;
+    if (numGroups(Number(options.numSpecies)) > 1) {
+      let diffusionShaderMRT = parseNormalDiffusionStrings() + "\n";
+      if (options.crossDiffusion) {
+        diffusionShaderMRT +=
+          parseCrossDiffusionStrings() +
+          "\n" +
+          RDShaderUpdateCrossMRT(Number(options.numSpecies));
+      } else {
+        diffusionShaderMRT += RDShaderUpdateNormalMRT(
+          Number(options.numSpecies),
+        );
+      }
 
-    type = "AB2";
-    assignFragmentShader(
-      simMaterials[type],
-      replaceMINXMINY(
-        [
-          kineticStr,
-          RDShaderTop(type),
-          middle,
-          insertRates(RDShaderMain(type)),
-          bot,
-        ].join(" "),
-      ),
-    );
+      // Group 1 (species 5-8) BCs: mirrors the group-0 blocks above exactly, via
+      // buildBCShadersForIndices (factored out so group 0's blocks don't need touching).
+      // All 4 slots are always processed regardless of exact numSpecies (5-8), matching the
+      // group-0 pattern of always processing all 4 slots regardless of numSpecies<=4.
+      const bcGroup1 = buildBCShadersForIndices([4, 5, 6, 7]);
 
-    type = "Mid";
-    for (let ind = 1; ind < 3; ind++) {
-      assignFragmentShader(
-        simMaterials[type + ind.toString()],
-        replaceMINXMINY(
-          [
-            kineticStr,
-            RDShaderTop(type + ind.toString()),
-            middle,
-            insertRates(RDShaderMain(type + ind.toString())),
-            bot,
-          ].join(" "),
-        ),
-      );
+      // Group 1 edge-clamping: always via the shader (clampSpeciesToEdgeShader,
+      // groupified to route to uvwq2), never via mutating mrtSimTextures' wrapping mode -
+      // unlike group 0's optimization of clamping the whole texture when every species
+      // needs it. This is a deliberate, documented simplification (correct, just not
+      // maximally optimized) rather than entangling this stage with Stage 3/8's
+      // render-target lifecycle further.
+      let clampShaderGroup1 = "";
+      let channelsHGroup1 = "";
+      [4, 5, 6, 7].forEach((ind) => {
+        if (bcGroup1.edgeClampSpeciesH[ind])
+          channelsHGroup1 += speciesToChannelChar(listOfSpecies[ind]);
+      });
+      if (channelsHGroup1) {
+        clampShaderGroup1 += groupifyShaderStr(
+          clampSpeciesToEdgeShader("H"),
+          1,
+        ).replaceAll(/\bSPECIES\b/g, channelsHGroup1);
+      }
+      let channelsVGroup1 = "";
+      [4, 5, 6, 7].forEach((ind) => {
+        if (bcGroup1.edgeClampSpeciesV[ind])
+          channelsVGroup1 += speciesToChannelChar(listOfSpecies[ind]);
+      });
+      if (channelsVGroup1) {
+        clampShaderGroup1 += groupifyShaderStr(
+          clampSpeciesToEdgeShader("V"),
+          1,
+        ).replaceAll(/\bSPECIES\b/g, channelsVGroup1);
+      }
+
+      // Group 1 algebraic species: mirrors the 3 hardcoded algebraicV/W/Q blocks above,
+      // generalized into a loop over algebraicSpeciesFlags (species 1-4 keep using the
+      // existing blocks/booleans, untouched). No longer gated on crossDiffusion - see the
+      // algebraicV block above for why.
+      let algebraicShaderGroup1 = "";
+      for (let s = 4; s < 8; s++) {
+        if (algebraicSpeciesFlags[s]) {
+          algebraicShaderGroup1 += selectSpeciesInShaderStr(
+            RDShaderAlgebraicSpecies(),
+            listOfSpecies[s],
+          );
+        }
+      }
+
+      middleMRT = [
+        clampShader,
+        clampShaderGroup1,
+        RDShaderAdvectionPreBC(),
+        RDShaderDiffusionPreBC(),
+        neumannShader,
+        bcGroup1.neumannShader,
+        ghostShader,
+        bcGroup1.ghostShader,
+        robinShader,
+        bcGroup1.robinShader,
+        RDShaderAdvectionPostBC(),
+        RDShaderDiffusionPostBC(),
+        parseReactionStrings(),
+        diffusionShaderMRT,
+      ].join(" ");
+      // Reuse the RAND/RANDN detection already done for `middle` above, rather than
+      // redoing it: parseReactionStrings()'s output (the only place WhiteNoise/RAND could
+      // come from) is identical whether it ends up embedded in `middle` or `middleMRT`.
+      if (containsRAND) middleMRT = randShader() + middleMRT;
+      if (containsRANDN) middleMRT = randNShader() + middleMRT;
+      botMRT = [
+        dirichletShader,
+        bcGroup1.dirichletShader,
+        algebraicShader,
+        algebraicShaderGroup1,
+        RDShaderBotMRT(),
+      ].join(" ");
     }
 
-    type = "RK4";
-    for (let ind = 1; ind < 5; ind++) {
-      assignFragmentShader(
-        simMaterials[type + ind.toString()],
-        replaceMINXMINY(
-          [
-            kineticStr,
-            RDShaderTop(type + ind.toString()),
-            middle,
-            insertRates(RDShaderMain(type + ind.toString())),
-            bot,
-          ].join(" "),
-        ),
-      );
-    }
+    // Build every timestepping scheme's material (AB2/Mid/RK4's MRT support added when the
+    // 8-species upgrade's Stage 13 sketch was implemented - previously only "FE" had an MRT
+    // branch here, with the rest always built from the non-MRT middle/bot regardless of
+    // numGroups, and Stage 9's dropdown guard prevented them from ever being selected above
+    // 4 species). middleMRT/botMRT (built above) are already scheme-agnostic - only
+    // RDShaderTopMRT(type)/RDShaderMainMRT(type) vary per scheme.
+    const isMRT = numGroups(Number(options.numSpecies)) > 1;
+    ["FE", "AB2", "Mid1", "Mid2", "RK41", "RK42", "RK43", "RK44"].forEach(
+      (type) => {
+        if (isMRT) {
+          assignFragmentShader(
+            simMaterials[type],
+            replaceMINXMINY(
+              [
+                kineticStr,
+                RDShaderTopMRT(type),
+                middleMRT,
+                insertRates(RDShaderMainMRT(type)),
+                botMRT,
+              ].join(" "),
+            ),
+          );
+          simMaterials[type].glslVersion = THREE.GLSL3;
+        } else {
+          assignFragmentShader(
+            simMaterials[type],
+            replaceMINXMINY(
+              [
+                kineticStr,
+                RDShaderTop(type),
+                middle,
+                insertRates(RDShaderMain(type)),
+                bot,
+              ].join(" "),
+            ),
+          );
+          simMaterials[type].glslVersion = null;
+        }
+      },
+    );
 
     Object.keys(simMaterials).forEach(
       (key) => (simMaterials[key].needsUpdate = true),
@@ -5293,70 +5963,141 @@ async function VisualPDE(url) {
     // BCs have been specified.
     checkForAnyDirichletBCs();
     if (anyDirichletBCs) {
-      dirichletShader = kineticStr + RDShaderEnforceDirichletTop();
-      if (options.domainViaIndicatorFun) {
-        let str = RDShaderDirichletIndicatorFun()
-          .replace(
+      if (numGroups(Number(options.numSpecies)) > 1) {
+        // MRT (>4-species) path (Stage 11.5 of the 8-species upgrade): built as an entirely
+        // separate dirichletShader from the one below (rather than sharing partial state) so
+        // that branch stays provably byte-for-byte unchanged. Loops over all 8 species
+        // directly via options["...Str_" + i] (BCStrs/DStrs/MStrs above are species-1-4-only
+        // by design, matching RDShaderUpdateNormal/Cross's group-0 scope) - previously,
+        // Dirichlet BCs had no effect at all once numSpecies>4: enforceDirichlet() only ever
+        // touched the unused (once numGroups>1) simTextures, and this shader's content never
+        // even attempted to include species 5-8's terms.
+        dirichletShader = kineticStr + RDShaderEnforceDirichletTopMRT();
+        if (options.domainViaIndicatorFun) {
+          let str = RDShaderDirichletIndicatorFun().replace(
             /indicatorFun/,
             parseShaderString(getModifiedDomainIndicatorFun()),
-          )
-          .replace(/updated/, "gl_FragColor");
-        DStrs.forEach(function (D, ind) {
-          if (BCStrs[ind] == "dirichlet") {
-            dirichletShader +=
-              selectSpeciesInShaderStr(str, listOfSpecies[ind]) +
-              parseShaderString(D) +
-              ";\n}\n";
-          } else {
-            dirichletShader +=
-              selectSpeciesInShaderStr(str, listOfSpecies[ind]) +
-              "0.0" +
-              ";\n}\n";
+          );
+          for (let ind = 0; ind < MAX_SPECIES_SUPPORTED; ind++) {
+            const D = options["dirichletStr_" + (ind + 1)];
+            if (options["boundaryConditions_" + (ind + 1)] == "dirichlet") {
+              dirichletShader +=
+                selectSpeciesInShaderStr(str, listOfSpecies[ind]) +
+                parseShaderString(D) +
+                ";\n}\n";
+            } else {
+              dirichletShader +=
+                selectSpeciesInShaderStr(str, listOfSpecies[ind]) +
+                "0.0" +
+                ";\n}\n";
+            }
           }
-        });
-      } else {
-        BCStrs.forEach(function (str, ind) {
-          if (str == "dirichlet") {
-            dirichletShader += parseDirichletRHS(
-              DStrs[ind],
-              listOfSpecies[ind],
-            );
-            dirichletShader += dirichletEnforceShader(ind);
-          } else if (str == "combo") {
-            [
-              ...MStrs[ind].matchAll(
-                /(Left|Right|Top|Bottom)\s*:\s*Dirichlet\s*=([^;]*);/gi,
-              ),
-            ].forEach(function (m) {
-              const side = m[1][0].toUpperCase();
+        } else {
+          for (let ind = 0; ind < MAX_SPECIES_SUPPORTED; ind++) {
+            const bcStr = options["boundaryConditions_" + (ind + 1)];
+            if (bcStr == "dirichlet") {
               dirichletShader += parseDirichletRHS(
-                m[2],
+                options["dirichletStr_" + (ind + 1)],
                 listOfSpecies[ind],
-                side,
               );
-              dirichletShader += dirichletEnforceShader(ind, side);
-            });
+              dirichletShader += dirichletEnforceShaderMRT(ind);
+            } else if (bcStr == "combo") {
+              [
+                ...(options["comboStr_" + (ind + 1)] + ";").matchAll(
+                  /(Left|Right|Top|Bottom)\s*:\s*Dirichlet\s*=([^;]*);/gi,
+                ),
+              ].forEach(function (m) {
+                const side = m[1][0].toUpperCase();
+                dirichletShader += parseDirichletRHS(
+                  m[2],
+                  listOfSpecies[ind],
+                  side,
+                );
+                dirichletShader += dirichletEnforceShaderMRT(ind, side);
+              });
+            }
           }
-        });
+        }
+        dirichletShader += RDShaderEnforceDirichletBotMRT();
+        dirichletShader = replaceMINXMINY(dirichletShader);
+        assignFragmentShader(dirichletMaterial, dirichletShader);
+        dirichletMaterial.glslVersion = THREE.GLSL3;
+      } else {
+        dirichletShader = kineticStr + RDShaderEnforceDirichletTop();
+        if (options.domainViaIndicatorFun) {
+          let str = RDShaderDirichletIndicatorFun()
+            .replace(
+              /indicatorFun/,
+              parseShaderString(getModifiedDomainIndicatorFun()),
+            )
+            .replace(/updated/, "gl_FragColor");
+          DStrs.forEach(function (D, ind) {
+            if (BCStrs[ind] == "dirichlet") {
+              dirichletShader +=
+                selectSpeciesInShaderStr(str, listOfSpecies[ind]) +
+                parseShaderString(D) +
+                ";\n}\n";
+            } else {
+              dirichletShader +=
+                selectSpeciesInShaderStr(str, listOfSpecies[ind]) +
+                "0.0" +
+                ";\n}\n";
+            }
+          });
+        } else {
+          BCStrs.forEach(function (str, ind) {
+            if (str == "dirichlet") {
+              dirichletShader += parseDirichletRHS(
+                DStrs[ind],
+                listOfSpecies[ind],
+              );
+              dirichletShader += dirichletEnforceShader(ind);
+            } else if (str == "combo") {
+              [
+                ...MStrs[ind].matchAll(
+                  /(Left|Right|Top|Bottom)\s*:\s*Dirichlet\s*=([^;]*);/gi,
+                ),
+              ].forEach(function (m) {
+                const side = m[1][0].toUpperCase();
+                dirichletShader += parseDirichletRHS(
+                  m[2],
+                  listOfSpecies[ind],
+                  side,
+                );
+                dirichletShader += dirichletEnforceShader(ind, side);
+              });
+            }
+          });
+        }
+        dirichletShader += "}";
+        dirichletShader = replaceMINXMINY(dirichletShader);
+        assignFragmentShader(dirichletMaterial, dirichletShader);
+        dirichletMaterial.glslVersion = null;
       }
-      dirichletShader += "}";
-      dirichletShader = replaceMINXMINY(dirichletShader);
-      assignFragmentShader(dirichletMaterial, dirichletShader);
       dirichletMaterial.needsUpdate = true;
     }
+
+    // Every diffusion coefficient controller's onFinishChange calls setRDEquations(), so this
+    // is the one shared place that keeps the diffusion matrix popup in sync when a coefficient
+    // is instead edited via its usual controller in the left UI (a no-op if the popup's
+    // closed, or if a diffusion coefficient wasn't what changed).
+    syncDiffusionMatrixGUI();
   }
 
   function checkForAnyDirichletBCs() {
+    // Loops over all 8 species slots (not just numSpecies) to match the existing pattern
+    // elsewhere in this file of always checking all slots in a group regardless of how many
+    // are officially "active" - harmless since inactive species are always forced to
+    // "periodic" by configureOptions(). setRDEquations()/enforceDirichlet() are both now
+    // MRT-aware (Stage 11.5 of the 8-species upgrade), so a Dirichlet BC on species 5-8 is
+    // correctly enforced once numSpecies>4.
     anyDirichletBCs =
       options.domainViaIndicatorFun ||
-      options.boundaryConditions_1 == "dirichlet" ||
-      options.boundaryConditions_2 == "dirichlet" ||
-      options.boundaryConditions_3 == "dirichlet" ||
-      options.boundaryConditions_4 == "dirichlet" ||
-      /Dirichlet/.test(options.comboStr_1) ||
-      /Dirichlet/.test(options.comboStr_2) ||
-      /Dirichlet/.test(options.comboStr_3) ||
-      /Dirichlet/.test(options.comboStr_4);
+      [1, 2, 3, 4, 5, 6, 7, 8].some(
+        (i) =>
+          options["boundaryConditions_" + i] == "dirichlet" ||
+          /Dirichlet/.test(options["comboStr_" + i]),
+      );
   }
 
   function parseRobinRHS(string, species, side) {
@@ -5467,9 +6208,6 @@ async function VisualPDE(url) {
     // Set the camera.
     configureCameraAndClicks();
 
-    // Update the globalIntegralFunTexStr.
-    globalIntegralFunTexStr = parseStringToTEX(options.globalIntegralFun);
-
     // To get around an annoying bug in dat.GUI.image, in which the
     // controller doesn't update the value of the underlying property,
     // we'll destroy and create a new image controller everytime we load
@@ -5504,13 +6242,13 @@ async function VisualPDE(url) {
         const closest = closestMatch(preset, listOfPresetNames, false);
         // Display an error if the preset doesn't exist.
         throwPresetError(
-          "We couldn't find a preset called '" +
+          "We couldn't find the preset ‘" +
             preset +
-            "'." +
+            "’." +
             (closest != null
-              ? " We've loaded the closest match, '" + closest + "'."
+              ? " We've loaded the closest match, ‘" + closest + "’, instead."
               : "") +
-            " Please check the preset specified in the URL.",
+            " Please check the preset name in the URL.",
         );
         // Load the default preset or the closest match.
         newOptions = getPreset(closest ? closest : defaultPreset);
@@ -5533,6 +6271,16 @@ async function VisualPDE(url) {
     kineticParamsLabels = [];
     kineticParamsStrs = {};
     kineticNameToCont = {};
+
+    // Reset the Expressions' "Show" checkbox states too: unlike options.expressions itself,
+    // most presets don't specify options.expressionsShow at all (it's fine for it to be
+    // absent - see getExpressionNameVals, which treats a short/missing string as "shown"),
+    // so without this reset a preset switch could otherwise leave a previous preset's
+    // checkbox states (for a different number of expressions) sitting in options past the
+    // point where they'd be meaningful. A preset/link that does specify its own
+    // expressionsShow (e.g. one generated from getShareableURL) overrides this via the
+    // Object.assign below, same as any other option.
+    options.expressionsShow = "";
 
     // Coerce the new options into the correct types.
     coerceOptions(newOptions);
@@ -5589,6 +6337,9 @@ async function VisualPDE(url) {
     delete options.algebraicW;
     delete options.algebraicQ;
 
+    // Set options.timescales = true, as these are now always enabled.
+    options.timescales = true;
+
     // Renaming of U/V/W/Q fields.
     // Map old to new.
     const oldToNewMap = getOldPresetFieldsToNew();
@@ -5601,6 +6352,13 @@ async function VisualPDE(url) {
         delete options[x];
       }
     });
+
+    // Migrate the old GlobalInt1-GlobalInt4/bare-GlobalInt token syntax to the new inline
+    // Int(expression) syntax. options.globalIntExprs itself is deliberately left for the
+    // next reconcileGlobalIntegrals() call (triggered by updateProblem() below) to
+    // (re)populate from the now-rewritten text, rather than duplicating that assignment
+    // logic here.
+    migrateGlobalIntSyntax();
 
     // If min/max colour value is null (happens if we've blown up to +-inf), set them to 0 and 1.
     if (options.minColourValue == null) options.minColourValue = "0";
@@ -5663,7 +6421,6 @@ async function VisualPDE(url) {
       options.dirichletStr_2,
       options.dirichletStr_3,
       options.dirichletStr_4,
-      options.globalIntegralFun,
       options.robinStr_1,
       options.robinStr_2,
       options.robinStr_3,
@@ -5739,6 +6496,28 @@ async function VisualPDE(url) {
     }
   }
 
+  // Rewrites group-0's hardcoded stencil/output variable names (uvwq, uvwqL/R/T/B/LL/RR/
+  // TT/BB, updated, RHS, timescales) to their group-1 counterparts (uvwq2, uvwq2L/R/T/B/
+  // LL/RR/TT/BB, updated2, RHS2, timescalesGroup1 - see RDShaderTopMRT/RDShaderMainMRT in
+  // simulation_shaders.js, which declare exactly these group-1 locals). A no-op for group
+  // 0. Used by selectSpeciesInShaderStr (for BC/algebraic-species templates) and directly
+  // for clampSpeciesToEdgeShader's output (which doesn't go through selectSpeciesInShaderStr
+  // - it does its own SPECIES substitution).
+  function groupifyShaderStr(shaderStr, group) {
+    if (group === 0) return shaderStr;
+    return shaderStr.replaceAll(
+      /\buvwqLL\b|\buvwqRR\b|\buvwqTT\b|\buvwqBB\b|\buvwqL\b|\buvwqR\b|\buvwqT\b|\buvwqB\b|\buvwq\b|\bupdated\b|\bRHS\b|\btimescales\b/g,
+      function (m) {
+        if (m === "uvwq") return "uvwq2";
+        if (m === "updated") return "updated2";
+        if (m === "RHS") return "RHS2";
+        if (m === "timescales") return "timescalesGroup1";
+        // uvwqL/R/T/B/LL/RR/TT/BB: insert "2" right after "uvwq".
+        return "uvwq2" + m.slice(4);
+      },
+    );
+  }
+
   function selectSpeciesInShaderStr(shaderStr, species) {
     // If there are no species, then return an empty string.
     if (species.length == 0) {
@@ -5751,86 +6530,62 @@ async function VisualPDE(url) {
     shaderStr = shaderStr.replace(regex, "robinRHS" + species);
     regex = /\bdirichletRHSSPECIES/g;
     shaderStr = shaderStr.replace(regex, "dirichletRHS" + species);
-    return shaderStr;
+    return groupifyShaderStr(shaderStr, speciesToGroupInd(species));
   }
 
   function speciesToChannelChar(speciesStr) {
-    let listOfChannels = "rgba";
-    return listOfChannels[speciesToChannelInd(speciesStr)];
+    // channelCharOfSpecies takes the species' raw (0-based) index and reduces it mod
+    // CHANNELS_PER_GROUP, since each texture group only has 4 channels (r,g,b,a) to reuse
+    // across groups. Behaviourally identical to the old direct "rgba"[ind] lookup for
+    // ind<4 (numSpecies<=4, a single group); safe for ind up to 7 once numGroups>1.
+    return channelCharOfSpecies(speciesToChannelInd(speciesStr));
   }
 
   function speciesToChannelInd(speciesStr) {
     return listOfSpecies.indexOf(speciesStr);
   }
 
+  // Which texture group (0-based) a species' state lives in. Group 0 is always the
+  // existing single-texture ("uvwq") group; group 1+ only exist once numSpecies>4.
+  function speciesToGroupInd(speciesStr) {
+    return groupOfSpecies(speciesToChannelInd(speciesStr));
+  }
+
+  // dat.gui controllers["..."] key for the (i,j) diffusion coefficient (1-based species
+  // indices). Species 1-4 keep their legacy hand-declared letter-pair keys (Duu..Dqq); any
+  // pair touching species 5-8 (Stage 9 of the upgrade) uses a numeric key, matching
+  // diffusionLabel()'s GLSL-token naming convention in species_config.js.
+  function diffCtrlKey(i, j) {
+    if (i <= 4 && j <= 4) {
+      return "D" + defaultSpecies[i - 1] + defaultSpecies[j - 1];
+    }
+    return "D_" + i + "_" + j;
+  }
+
+  // The GLSL stencil-vec4 variable prefix for a species: "uvwq" (group 0, unchanged) or
+  // "uvwq2" (group 1, species 5-8) - see RDShaderTopMRT/RDShaderMainMRT in
+  // simulation_shaders.js, which declare the uvwq2-prefixed locals this references.
+  function stencilPrefixForSpecies(speciesStr) {
+    return speciesToGroupInd(speciesStr) === 0 ? "uvwq" : "uvwq2";
+  }
+
   function setBCsGUI() {
-    // Update the GUI.
-    if (options.boundaryConditions_1 == "dirichlet") {
-      controllers["dirichletU"].show();
-    } else {
-      controllers["dirichletU"].hide();
-    }
-    if (options.boundaryConditions_2 == "dirichlet") {
-      controllers["dirichletV"].show();
-    } else {
-      controllers["dirichletV"].hide();
-    }
-    if (options.boundaryConditions_3 == "dirichlet") {
-      controllers["dirichletW"].show();
-    } else {
-      controllers["dirichletW"].hide();
-    }
-    if (options.boundaryConditions_4 == "dirichlet") {
-      controllers["dirichletQ"].show();
-    } else {
-      controllers["dirichletQ"].hide();
-    }
-
-    if (options.boundaryConditions_1 == "neumann") {
-      controllers["neumannU"].show();
-    } else {
-      controllers["neumannU"].hide();
-    }
-    if (options.boundaryConditions_2 == "neumann") {
-      controllers["neumannV"].show();
-    } else {
-      controllers["neumannV"].hide();
-    }
-    if (options.boundaryConditions_3 == "neumann") {
-      controllers["neumannW"].show();
-    } else {
-      controllers["neumannW"].hide();
-    }
-    if (options.boundaryConditions_4 == "neumann") {
-      controllers["neumannQ"].show();
-    } else {
-      controllers["neumannQ"].hide();
-    }
-
-    if (options.boundaryConditions_1 == "robin") {
-      controllers["robinU"].show();
-    } else {
-      controllers["robinU"].hide();
-    }
-    if (options.boundaryConditions_2 == "robin") {
-      controllers["robinV"].show();
-    } else {
-      controllers["robinV"].hide();
-    }
-    if (options.boundaryConditions_3 == "robin") {
-      controllers["robinW"].show();
-    } else {
-      controllers["robinW"].hide();
-    }
-    if (options.boundaryConditions_4 == "robin") {
-      controllers["robinQ"].show();
-    } else {
-      controllers["robinQ"].hide();
+    // Update the GUI. Show/hide each species' dirichlet/neumann/robin sub-controls based on
+    // its currently selected boundary-condition type.
+    const bcsKeys = [];
+    for (let i = 1; i <= MAX_SPECIES_SUPPORTED; i++) {
+      const s = defaultSpecies[i - 1];
+      const S = s.toUpperCase();
+      bcsKeys.push(s + "BCs");
+      const bc = options["boundaryConditions_" + i];
+      controllers["dirichlet" + S][bc == "dirichlet" ? "show" : "hide"]();
+      controllers["neumann" + S][bc == "neumann" ? "show" : "hide"]();
+      controllers["robin" + S][bc == "robin" ? "show" : "hide"]();
     }
 
     let overrideShowComboStr = true;
     if (options.plotType != "surface") {
-      ["uBCs", "vBCs", "wBCs", "qBCs"].forEach((str) => {
+      bcsKeys.forEach((str) => {
         controllers[str].domElement
           .getElementsByClassName("combo-bcs")[0]
           .classList.remove("hidden");
@@ -5839,16 +6594,16 @@ async function VisualPDE(url) {
     }
 
     // Always hide the combo BCs string.
-    controllers["comboU"].hide();
-    controllers["comboV"].hide();
-    controllers["comboW"].hide();
-    controllers["comboQ"].hide();
+    for (let i = 1; i <= MAX_SPECIES_SUPPORTED; i++) {
+      controllers["combo" + defaultSpecies[i - 1].toUpperCase()].hide();
+    }
 
     if (options.showComboStr || overrideShowComboStr) {
-      if (options.boundaryConditions_1 == "combo") controllers["comboU"].show();
-      if (options.boundaryConditions_2 == "combo") controllers["comboV"].show();
-      if (options.boundaryConditions_3 == "combo") controllers["comboW"].show();
-      if (options.boundaryConditions_4 == "combo") controllers["comboQ"].show();
+      for (let i = 1; i <= MAX_SPECIES_SUPPORTED; i++) {
+        if (options["boundaryConditions_" + i] == "combo") {
+          controllers["combo" + defaultSpecies[i - 1].toUpperCase()].show();
+        }
+      }
     }
 
     // If the comboBCsGUI is visible, make all clickAreas visible.
@@ -5856,12 +6611,7 @@ async function VisualPDE(url) {
       revealClickAreas();
     }
 
-    const BCsControllers = [
-      controllers["uBCs"],
-      controllers["vBCs"],
-      controllers["wBCs"],
-      controllers["qBCs"],
-    ];
+    const BCsControllers = bcsKeys.map((key) => controllers[key]);
     if (options.domainViaIndicatorFun) {
       BCsControllers.forEach((cont) => {
         updateGUIDropdown(
@@ -5892,36 +6642,101 @@ async function VisualPDE(url) {
   }
 
   function setClearShader() {
+    // Must run before anything below that could reference an Int(...) expression - see
+    // reconcileGlobalIntegrals().
+    reconcileGlobalIntegrals();
     // Insert any user-defined kinetic parameters, as uniforms.
-    let shaderStr = kineticUniformsForShader() + clearShaderTop();
-    let allClearShaders = [
-      options.initCond_1,
-      options.initCond_2,
-      options.initCond_3,
-      options.initCond_4,
-    ].join(" ");
-    if (
-      /\bRAND\b/.test(allClearShaders) ||
-      /\bRANDVAL\b/.test(allClearShaders)
-    ) {
-      shaderStr += randShader();
+    let kineticStr = kineticUniformsForShader();
+    if (numGroups(Number(options.numSpecies)) > 1) {
+      // MRT (>4-species) path: separate top/bot (dual output, GLSL3) and species-5-8
+      // locals. Kept entirely separate from the numGroups===1 branch below (rather than
+      // sharing partial state) so that branch is provably byte-for-byte unchanged.
+      let shaderStr = kineticStr + clearShaderTopMRT();
+      let allClearShaders = [
+        options.initCond_1,
+        options.initCond_2,
+        options.initCond_3,
+        options.initCond_4,
+        options.initCond_5,
+        options.initCond_6,
+        options.initCond_7,
+        options.initCond_8,
+      ].join(" ");
+      if (
+        /\bRAND\b/.test(allClearShaders) ||
+        /\bRANDVAL\b/.test(allClearShaders)
+      ) {
+        shaderStr += randShader();
+      }
+      if (/\bRANDN(_[1234])?\b/.test(allClearShaders)) {
+        shaderStr += randNShader();
+      }
+      shaderStr +=
+        "float u = " + parseShaderString(options.initCond_1, false) + ";\n";
+      shaderStr +=
+        "float v = " + parseShaderString(options.initCond_2, false) + ";\n";
+      shaderStr +=
+        "float w = " + parseShaderString(options.initCond_3, false) + ";\n";
+      shaderStr +=
+        "float q = " + parseShaderString(options.initCond_4, false) + ";\n";
+      shaderStr +=
+        "float u5 = " + parseShaderString(options.initCond_5, false) + ";\n";
+      shaderStr +=
+        "float u6 = " + parseShaderString(options.initCond_6, false) + ";\n";
+      shaderStr +=
+        "float u7 = " + parseShaderString(options.initCond_7, false) + ";\n";
+      shaderStr +=
+        "float u8 = " + parseShaderString(options.initCond_8, false) + ";\n";
+      shaderStr += clearShaderBotMRT();
+      shaderStr = replaceMINXMINY(shaderStr);
+      assignFragmentShader(clearMaterial, shaderStr);
+      clearMaterial.glslVersion = THREE.GLSL3;
+    } else {
+      let shaderStr = kineticStr + clearShaderTop();
+      let allClearShaders = [
+        options.initCond_1,
+        options.initCond_2,
+        options.initCond_3,
+        options.initCond_4,
+      ].join(" ");
+      if (
+        /\bRAND\b/.test(allClearShaders) ||
+        /\bRANDVAL\b/.test(allClearShaders)
+      ) {
+        shaderStr += randShader();
+      }
+      if (/\bRANDN(_[1234])?\b/.test(allClearShaders)) {
+        shaderStr += randNShader();
+      }
+      shaderStr +=
+        "float u = " + parseShaderString(options.initCond_1, false) + ";\n";
+      shaderStr +=
+        "float v = " + parseShaderString(options.initCond_2, false) + ";\n";
+      shaderStr +=
+        "float w = " + parseShaderString(options.initCond_3, false) + ";\n";
+      shaderStr +=
+        "float q = " + parseShaderString(options.initCond_4, false) + ";\n";
+      shaderStr += clearShaderBot();
+      shaderStr = replaceMINXMINY(shaderStr);
+      assignFragmentShader(clearMaterial, shaderStr);
+      clearMaterial.glslVersion = null;
     }
-    if (/\bRANDN(_[1234])?\b/.test(allClearShaders)) {
-      shaderStr += randNShader();
-    }
-    shaderStr += "float u = " + parseShaderString(options.initCond_1) + ";\n";
-    shaderStr += "float v = " + parseShaderString(options.initCond_2) + ";\n";
-    shaderStr += "float w = " + parseShaderString(options.initCond_3) + ";\n";
-    shaderStr += "float q = " + parseShaderString(options.initCond_4) + ";\n";
-    shaderStr += clearShaderBot();
-    shaderStr = replaceMINXMINY(shaderStr);
-    assignFragmentShader(clearMaterial, shaderStr);
     clearMaterial.needsUpdate = true;
   }
 
   function setProbeShader() {
-    // Insert any user-defined kinetic parameters, as uniforms.
-    let shaderStr = kineticUniformsForShader() + probeShader();
+    // Must run before anything below that could reference an Int(...) expression - see
+    // reconcileGlobalIntegrals().
+    reconcileGlobalIntegrals();
+    // Insert any user-defined kinetic parameters, as uniforms. probeShaderMRT (>4 species)
+    // just adds a second input sampler + group-1 locals so PROBE_FUN can reference species
+    // 5-8 - still single-output, so no glslVersion toggle is needed here (unlike the main
+    // simulation/clear shaders).
+    let shaderStr =
+      kineticUniformsForShader() +
+      (numGroups(Number(options.numSpecies)) > 1
+        ? probeShaderMRT()
+        : probeShader());
     shaderStr = replaceMINXMINY(shaderStr);
     // Insert the user-defined location of the probe.
     shaderStr = shaderStr.replace("PROBE_X", parseShaderString(options.probeX));
@@ -5940,14 +6755,180 @@ async function VisualPDE(url) {
     probeMaterial.needsUpdate = true;
   }
 
+  /**
+   * Finds every top-level Int(...) call in str, matching balanced brackets so nested
+   * parens inside the argument (e.g. Int(u*(v+1))) are handled correctly - mirrors the
+   * depth-counting bracket walk in enableImageLookupInShader(). A nested Int(...) call
+   * (e.g. Int(Int(u))) isn't a meaningful quantity (Int(u) is already constant over
+   * space, so integrating it again is degenerate), so it's rejected via throwError
+   * rather than silently resolved.
+   *
+   * @param {string} str
+   * @returns {{start: number, end: number, expr: string}[]} One entry per Int(...) call,
+   *   in order of appearance. start/end span the whole "Int(...)" call (end exclusive);
+   *   expr is the argument text, canonicalized via canonicalizeIntExpr() so equivalent
+   *   expressions that only differ by incidental whitespace compare equal.
+   */
+  function parseIntCalls(str) {
+    const calls = [];
+    const regex = /\bInt\s*\(/g;
+    let match;
+    while ((match = regex.exec(str))) {
+      const argStart = match.index + match[0].length;
+      let depth = 1;
+      let ind = argStart;
+      while (ind < str.length && depth > 0) {
+        if (str[ind] == "(") depth++;
+        else if (str[ind] == ")") depth--;
+        ind++;
+      }
+      if (depth != 0) {
+        // Unbalanced brackets - nothing sensible to extract. Leave as-is; general
+        // syntax checking elsewhere (isValidSyntax) will already flag this string.
+        continue;
+      }
+      const argStr = str.slice(argStart, ind - 1);
+      if (/\bInt\s*\(/.test(argStr)) {
+        throwError(
+          "Int(...) expressions cannot be nested. Please rewrite your expression so that Int(...) is not used inside another Int(...).",
+        );
+        // Don't record the nested call - its argument text (literally containing "Int(...)")
+        // must never be treated as a real expression to assign a slot to or resolve to a
+        // uniform, or the outer Int(...) would end up wired straight to whatever uniform its
+        // own (bogus) argument happens to canonicalize to.
+        regex.lastIndex = ind;
+        continue;
+      }
+      calls.push({
+        start: match.index,
+        end: ind,
+        expr: canonicalizeIntExpr(argStr),
+      });
+      regex.lastIndex = ind;
+    }
+    return calls;
+  }
+
+  // Canonicalizes an Int(...) argument for equality comparison, so that e.g. "u*v" and
+  // "u * v" (or any other incidental whitespace difference) are recognized as the same
+  // expression and share a slot. Used only as a comparison/lookup key (options.globalIntExprs
+  // entries, parseShaderString's slot lookup) - never shown to the user or spliced into
+  // shader/TeX output, so there's no readability cost to stripping whitespace entirely
+  // rather than just collapsing it.
+  function canonicalizeIntExpr(str) {
+    return str.replace(/\s+/g, "");
+  }
+
+  /**
+   * Replaces every top-level Int(expression) call in str with replacer(canonicalExpr),
+   * using parseIntCalls() to correctly match balanced brackets around each argument (so
+   * e.g. Int(u*(v+1)) is replaced as a whole, not split on the inner parens). Mirrors the
+   * offset-tracking splice loop in enableImageLookupInShader().
+   *
+   * @param {string} str
+   * @param {(expr: string) => string} replacer
+   * @returns {string}
+   */
+  function replaceIntCalls(str, replacer) {
+    let out = str;
+    let offset = 0;
+    parseIntCalls(str).forEach(({ start, end, expr }) => {
+      const replacement = replacer(expr);
+      out = replaceStrAtIndex(out, replacement, start + offset, end + offset);
+      offset += replacement.length - (end - start);
+    });
+    return out;
+  }
+
+  /**
+   * Scans every user-editable expression field for Int(expression) usages and keeps
+   * options.globalIntExprs - the stable expression -> globalIntegralValueN slot
+   * assignment consumed by parseShaderString/parseStringToTEX/setGlobalIntegralShader -
+   * in sync. This is the Int(...) analog of refreshExpressionExpansions() (which plays
+   * the same "resolve once per rebuild, report errors via throwError" role for the
+   * separate Expressions macro feature).
+   *
+   * Slot assignment is deliberately stable, not recomputed from scratch: an expression
+   * that's still referenced anywhere keeps its existing slot, a freed slot (its
+   * expression no longer appears anywhere) is left empty rather than compacting the
+   * others down, and a newly-appearing expression takes the lowest free slot. This means
+   * adding or removing an unrelated Int(...) elsewhere never renumbers - and hence never
+   * forces a shader rebuild for - an existing one.
+   *
+   * Only ever called from the various shader-rebuild entry points (setRDEquations,
+   * setClearShader, setProbeShader, setBrushType, setPostFunFragShader,
+   * setDisplayColourAndType, updateShaders) - never from setGlobalIntegralShader()
+   * itself, which is this function's own (conditional) output step.
+   *
+   * @returns {boolean} Whether options.globalIntExprs actually changed - i.e. whether
+   *   the integral shader/equation display needed rebuilding.
+   */
+  function reconcileGlobalIntegrals() {
+    const seen = [];
+    getUserTextFields().forEach((key) => {
+      const text = options[key];
+      if (typeof text !== "string") return;
+      parseIntCalls(text).forEach(({ expr }) => {
+        if (!seen.includes(expr)) seen.push(expr);
+      });
+    });
+
+    const prev = options.globalIntExprs;
+    const next = prev.slice();
+
+    // Free slots whose expression is no longer referenced anywhere - without shifting
+    // the remaining slots. That's what gives us stability.
+    next.forEach((expr, i) => {
+      if (expr != null && !seen.includes(expr)) next[i] = null;
+    });
+
+    // Assign newly-appearing expressions to the lowest free slot, in first-appearance order.
+    const overflow = [];
+    seen.forEach((expr) => {
+      if (next.includes(expr)) return;
+      const freeInd = next.indexOf(null);
+      if (freeInd == -1) {
+        overflow.push(expr);
+      } else {
+        next[freeInd] = expr;
+      }
+    });
+
+    if (overflow.length > 0) {
+      throwError(
+        "You can define at most 4 unique Int(...) expressions across your simulation. Please remove one before adding another.",
+      );
+    }
+
+    const changed = next.some((expr, i) => expr !== prev[i]);
+    if (changed) {
+      options.globalIntExprs = next;
+      setGlobalIntegralShader();
+      setEquationDisplayType();
+    }
+    return changed;
+  }
+
   function setGlobalIntegralShader() {
-    // Insert any user-defined kinetic parameters, as uniforms.
-    let shaderStr = kineticUniformsForShader() + globalIntegralShader();
+    // Insert any user-defined kinetic parameters, as uniforms. globalIntegralShaderMRT
+    // (>4 species) just adds a second input sampler + group-1 locals so
+    // GLOBAL_INTEGRAL_FUN1-4 can reference species 5-8 - still single-output, so no
+    // glslVersion toggle is needed here.
+    let shaderStr =
+      kineticUniformsForShader() +
+      (numGroups(Number(options.numSpecies)) > 1
+        ? globalIntegralShaderMRT()
+        : globalIntegralShader());
     shaderStr = replaceMINXMINY(shaderStr);
-    shaderStr = shaderStr.replace(
-      /GLOBAL_INTEGRAL_FUN/g,
-      parseShaderString(options.globalIntegralFun),
+    const globalIntegralComponents = options.globalIntExprs.map(
+      (expr) => expr || "0",
     );
+    for (let i = 1; i <= 4; i++) {
+      shaderStr = shaderStr.replace(
+        new RegExp("GLOBAL_INTEGRAL_FUN" + i, "g"),
+        parseShaderString(globalIntegralComponents[i - 1]),
+      );
+    }
     let replacement = "1";
     if (options.domainViaIndicatorFun) {
       replacement = parseShaderString(getModifiedDomainIndicatorFun());
@@ -5957,10 +6938,52 @@ async function VisualPDE(url) {
     globalIntegralMaterial.needsUpdate = true;
   }
 
-  function updateGlobalIntegralFun() {
-    globalIntegralFunTexStr = parseShaderString(options.globalIntegralFun);
-    setGlobalIntegralShader();
-    setEquationDisplayType();
+  /**
+   * One-shot migration, run from loadOptions(), of the old GlobalInt1-GlobalInt4/bare-
+   * GlobalInt token syntax (which referred to one of 4 expressions packed into the old
+   * options.globalIntegralFun field, "expr1;expr2;expr3;expr4") into the new inline
+   * Int(expression) syntax: rewrites every occurrence embedded in any field in
+   * getUserTextFields() (and any per-view override of one) into Int(<that slot's old
+   * expression>), then deletes options.globalIntegralFun. A no-op if options has no
+   * globalIntegralFun field (i.e. nothing old-format to migrate).
+   */
+  function migrateGlobalIntSyntax() {
+    if (!options.hasOwnProperty("globalIntegralFun")) return;
+    const oldParts = options.globalIntegralFun.split(";");
+    const oldComponents = [0, 1, 2, 3].map((i) => oldParts[i]?.trim() || "0");
+    const rewriteOldGlobalIntSyntax = (text) => {
+      if (typeof text != "string") return text;
+      // Bare GlobalInt means slot 1, for backwards compatibility - matched separately
+      // since \bGlobalInt\b doesn't also match GlobalInt1-4 (the trailing digit breaks
+      // the word boundary), so the two passes can't double up on the same occurrence.
+      let out = text.replaceAll(
+        /\bGlobalInt\b/g,
+        "Int(" + oldComponents[0] + ")",
+      );
+      for (let i = 1; i <= 4; i++) {
+        out = out.replaceAll(
+          new RegExp("\\bGlobalInt" + i + "\\b", "g"),
+          "Int(" + oldComponents[i - 1] + ")",
+        );
+      }
+      return out;
+    };
+    const fieldsToScan = getUserTextFields();
+    fieldsToScan.forEach((key) => {
+      if (options.hasOwnProperty(key)) {
+        options[key] = rewriteOldGlobalIntSyntax(options[key]);
+      }
+    });
+    options.views = (options.views || []).map((view) => {
+      const newView = { ...view };
+      Object.keys(view).forEach((key) => {
+        if (fieldsToScan.includes(key)) {
+          newView[key] = rewriteOldGlobalIntSyntax(view[key]);
+        }
+      });
+      return newView;
+    });
+    delete options.globalIntegralFun;
   }
 
   function loadImageSourceOne() {
@@ -6042,97 +7065,46 @@ async function VisualPDE(url) {
     configureIntegralDisplay();
   }
 
-  function showVGUIPanels() {
-    if (options.timescales) controllers["TV"].show();
-    if (options.crossDiffusion) {
-      controllers["Duv"].show();
-      controllers["Dvu"].show();
-    } else {
-      controllers["Duv"].hide();
-      controllers["Dvu"].hide();
+  // Species 1-4 use a short letter-suffixed timescale key ("TU".."TQ", matching
+  // timescaleTags); species 5-8 have no natural single-letter mnemonic, so they use
+  // "TU5".."TU8" instead (same convention as diffCtrlKey/reactionTokenOfSpecies).
+  function timescaleTag(i) {
+    return i <= 4 ? "T" + defaultSpecies[i - 1].toUpperCase() : "TU" + i;
+  }
+
+  // Shows/hides one species' GUI panels (timescale, diffusion row/column, reaction term,
+  // initial condition, boundary condition), for species 2-8 (species 1/u is always shown -
+  // numSpecies is never less than 1). Only handles cross-diffusion pairs with
+  // STRICTLY LOWER-indexed species (j<i): the species-count switch in configureGUI() calls
+  // these in descending order (8,7,...,2), so a higher-indexed species' own call already
+  // handles its pairing with this one.
+  function showSpeciesGUIPanels(i) {
+    if (options.timescales) controllers[timescaleTag(i)].show();
+    for (let j = 1; j < i; j++) {
+      if (options.crossDiffusion) {
+        controllers[diffCtrlKey(i, j)].show();
+        controllers[diffCtrlKey(j, i)].show();
+      } else {
+        controllers[diffCtrlKey(i, j)].hide();
+        controllers[diffCtrlKey(j, i)].hide();
+      }
     }
-    controllers["Dvv"].show();
-    controllers["g"].show();
-    controllers["initCond_2"].show();
-    controllers["vBCs"].show();
+    controllers[diffCtrlKey(i, i)].show();
+    controllers["reaction_" + i].show();
+    controllers["initCond_" + i].show();
+    controllers[defaultSpecies[i - 1] + "BCs"].show();
   }
 
-  function showWGUIPanels() {
-    if (options.timescales) controllers["TW"].show();
-    if (options.crossDiffusion) {
-      controllers["Duw"].show();
-      controllers["Dvw"].show();
-      controllers["Dwu"].show();
-      controllers["Dwv"].show();
-    } else {
-      controllers["Duw"].hide();
-      controllers["Dvw"].hide();
-      controllers["Dwu"].hide();
-      controllers["Dwv"].hide();
+  function hideSpeciesGUIPanels(i) {
+    controllers[timescaleTag(i)].hide();
+    for (let j = 1; j < i; j++) {
+      controllers[diffCtrlKey(i, j)].hide();
+      controllers[diffCtrlKey(j, i)].hide();
     }
-    controllers["Dww"].show();
-    controllers["h"].show();
-    controllers["initCond_3"].show();
-    controllers["wBCs"].show();
-  }
-
-  function showQGUIPanels() {
-    if (options.timescales) controllers["TQ"].show();
-    if (options.crossDiffusion) {
-      controllers["Duq"].show();
-      controllers["Dvq"].show();
-      controllers["Dwq"].show();
-      controllers["Dqu"].show();
-      controllers["Dqv"].show();
-      controllers["Dqw"].show();
-    } else {
-      controllers["Dwq"].hide();
-      controllers["Dqu"].hide();
-      controllers["Dvq"].hide();
-      controllers["Duq"].hide();
-      controllers["Dqv"].hide();
-      controllers["Dqw"].hide();
-    }
-    controllers["Dqq"].show();
-    controllers["j"].show();
-    controllers["initCond_4"].show();
-    controllers["qBCs"].show();
-  }
-
-  function hideVGUIPanels() {
-    controllers["TV"].hide();
-    controllers["Duv"].hide();
-    controllers["Dvu"].hide();
-    controllers["Dvv"].hide();
-    controllers["g"].hide();
-    controllers["initCond_2"].hide();
-    controllers["vBCs"].hide();
-  }
-
-  function hideWGUIPanels() {
-    controllers["TW"].hide();
-    controllers["Duw"].hide();
-    controllers["Dvw"].hide();
-    controllers["Dwu"].hide();
-    controllers["Dwv"].hide();
-    controllers["Dww"].hide();
-    controllers["h"].hide();
-    controllers["initCond_3"].hide();
-    controllers["wBCs"].hide();
-  }
-
-  function hideQGUIPanels() {
-    controllers["TQ"].hide();
-    controllers["Duq"].hide();
-    controllers["Dvq"].hide();
-    controllers["Dwq"].hide();
-    controllers["Dqu"].hide();
-    controllers["Dqv"].hide();
-    controllers["Dqw"].hide();
-    controllers["Dqq"].hide();
-    controllers["j"].hide();
-    controllers["initCond_4"].hide();
-    controllers["qBCs"].hide();
+    controllers[diffCtrlKey(i, i)].hide();
+    controllers["reaction_" + i].hide();
+    controllers["initCond_" + i].hide();
+    controllers[defaultSpecies[i - 1] + "BCs"].hide();
   }
 
   function diffObjects(o1, o2) {
@@ -6167,8 +7139,19 @@ async function VisualPDE(url) {
   }
 
   function setPostFunFragShader() {
-    let shaderStr = kineticUniformsForShader() + computeDisplayFunShaderTop();
-    shaderStr += computeDisplayFunShaderMid()
+    // Must run before anything below that could reference an Int(...) expression - see
+    // reconcileGlobalIntegrals().
+    reconcileGlobalIntegrals();
+    // computeDisplayFunShaderTopMRT/MidMRT (>4 species) just add a second input sampler +
+    // group-1 locals so FUN/HEIGHT/XVECFUN/YVECFUN can reference species 5-8 - still
+    // single-output, so no glslVersion toggle is needed here.
+    const isMRT = numGroups(Number(options.numSpecies)) > 1;
+    let shaderStr =
+      kineticUniformsForShader() +
+      (isMRT ? computeDisplayFunShaderTopMRT() : computeDisplayFunShaderTop());
+    shaderStr += (
+      isMRT ? computeDisplayFunShaderMidMRT() : computeDisplayFunShaderMid()
+    )
       .replace(/\bXVECFUN\b/, parseShaderString(options.arrowX))
       .replace(/\bYVECFUN\b/, parseShaderString(options.arrowY));
     shaderStr = setDisplayFunInShader(shaderStr);
@@ -6211,6 +7194,14 @@ async function VisualPDE(url) {
     algebraicQ =
       options.numAlgebraicSpecies >= options.numSpecies - 3 &&
       options.numSpecies >= 4;
+    // Species 5-8 (0-based indices 4-7): same "reverse order" rule (the last
+    // numAlgebraicSpecies species, by index, are algebraic), generalized to any index.
+    // Only relevant once numGroups(numSpecies)>1 (numSpecies>4).
+    for (let s = 4; s < 8; s++) {
+      algebraicSpeciesFlags[s] =
+        options.numSpecies > s &&
+        options.numAlgebraicSpecies >= options.numSpecies - s;
+    }
   }
 
   function problemTypeFromOptions() {
@@ -6300,7 +7291,10 @@ async function VisualPDE(url) {
     } else {
       controllers["minY"].show();
     }
-    if (options.crossDiffusion && parseInt(options.numSpecies) > 1) {
+    // Algebraic species no longer require cross diffusion (relaxed - see the algebraicV
+    // block in setRDEquations() for why); only >1 species is needed for "algebraic" to mean
+    // anything.
+    if (parseInt(options.numSpecies) > 1) {
       if (!updatingAlgebraicSpecies) {
         updateGUIDropdown(
           controllers["algebraicSpecies"],
@@ -6339,105 +7333,134 @@ async function VisualPDE(url) {
       $("#cross_diffusion_controller").hide();
     }
 
-    // Show all timescale panels to begin with.
-    timescaleTags.forEach((tag) => controllers[tag].show());
+    // The "edit as a matrix" button is hidden on small screens - the popup's grid needs real screen
+    // space to be usable.
+    diffusionMatrixButton.classList.toggle("hidden", onSmallScreen());
 
-    // Hide/Show VWQGUI panels.
-    hideVGUIPanels();
-    hideWGUIPanels();
-    hideQGUIPanels();
-    switch (parseInt(options.numSpecies)) {
-      case 4:
-        showQGUIPanels();
-      case 3:
-        showWGUIPanels();
-      case 2:
-        showVGUIPanels();
-    }
-    // Hide timescale panels if we don't need them.
+    // Show all timescale panels to begin with. Guarded with ?. because controllers for
+    // TU5-TU8 don't exist until the GUI is extended to 8 species (Stage 9 of the upgrade).
+    timescaleTags.forEach((tag) => controllers[tag]?.show());
+
+    // Hide every species' panels (species 1/u is always shown), then show them back in for
+    // however many species are actually active.
+    for (let i = 2; i <= MAX_SPECIES_SUPPORTED; i++) hideSpeciesGUIPanels(i);
+    for (let i = 2; i <= parseInt(options.numSpecies); i++)
+      showSpeciesGUIPanels(i);
+    // Hide timescale panels if we don't need them. Guarded with ?. (see note above).
     if (!options.timescales) {
-      timescaleTags.forEach((tag) => controllers[tag].hide());
+      timescaleTags.forEach((tag) => controllers[tag]?.hide());
+    }
+    // The whole "Timescales" sub-folder (not just its individual controllers, above) only
+    // makes sense when timescales are turned on - otherwise it'd show as an empty folder.
+    // dat.gui folders have no show()/hide() of their own (only controllers do) - toggle the
+    // shared .hidden utility class on the folder's domElement directly, matching the existing
+    // pattern for hiding other folders (e.g. editViewFolder above).
+    timescalesFolder.domElement.classList.toggle("hidden", !options.timescales);
+
+    // Configure the controller names. We'll set the generic names then alter any algebraic
+    // ones. Diffusion TeX keys: species 1-4 pairs use the legacy "D"+letter+letter form
+    // (e.g. "Duv"); any pair touching species 5-8 uses an uppercase-letter/number form with no
+    // "D" prefix (e.g. "U5U", "U5U6" - see getDefaultTeXLabelsDiffusion in TEX.js). Self-
+    // diffusion when cross-diffusion is off uses a single-subscript form ("Du" for species
+    // 1-4, "Du5" for species 5-8) - cross-term controllers stay hidden in that case (see
+    // hideSpeciesGUIPanels), so their name is never visible and is left untouched.
+    for (let i = 1; i <= MAX_SPECIES_SUPPORTED; i++) {
+      for (let j = 1; j <= MAX_SPECIES_SUPPORTED; j++) {
+        if (!options.crossDiffusion && i !== j) continue;
+        let texKey;
+        if (i === j && !options.crossDiffusion) {
+          texKey = i <= 4 ? "D" + defaultSpecies[i - 1] : "Du" + i;
+        } else if (i <= 4 && j <= 4) {
+          texKey = "D" + defaultSpecies[i - 1] + defaultSpecies[j - 1];
+        } else {
+          texKey =
+            defaultSpecies[i - 1].toUpperCase() +
+            defaultSpecies[j - 1].toUpperCase();
+        }
+        setGUIControllerName(
+          controllers[diffCtrlKey(i, j)],
+          TeXStrings[texKey] || "D_" + i + "_" + j,
+          tooltip,
+        );
+      }
     }
 
-    // Configure the controller names.
-    // We'll set the generic names then alter any algebraic ones.
-    if (options.crossDiffusion) {
-      setGUIControllerName(controllers["Duu"], TeXStrings["Duu"], tooltip);
-      setGUIControllerName(controllers["Duv"], TeXStrings["Duv"], tooltip);
-      setGUIControllerName(controllers["Duw"], TeXStrings["Duw"], tooltip);
-      setGUIControllerName(controllers["Duq"], TeXStrings["Duq"], tooltip);
-      setGUIControllerName(controllers["Dvu"], TeXStrings["Dvu"], tooltip);
-      setGUIControllerName(controllers["Dvv"], TeXStrings["Dvv"], tooltip);
-      setGUIControllerName(controllers["Dvw"], TeXStrings["Dvw"], tooltip);
-      setGUIControllerName(controllers["Dvq"], TeXStrings["Dvq"], tooltip);
-      setGUIControllerName(controllers["Dwu"], TeXStrings["Dwu"], tooltip);
-      setGUIControllerName(controllers["Dwv"], TeXStrings["Dwv"], tooltip);
-      setGUIControllerName(controllers["Dww"], TeXStrings["Dww"], tooltip);
-      setGUIControllerName(controllers["Dwq"], TeXStrings["Dwq"], tooltip);
-      setGUIControllerName(controllers["Dqu"], TeXStrings["Dqu"], tooltip);
-      setGUIControllerName(controllers["Dqv"], TeXStrings["Dqv"], tooltip);
-      setGUIControllerName(controllers["Dqw"], TeXStrings["Dqw"], tooltip);
-      setGUIControllerName(controllers["Dqq"], TeXStrings["Dqq"], tooltip);
-    } else {
-      setGUIControllerName(controllers["Duu"], TeXStrings["Du"], tooltip);
-      setGUIControllerName(controllers["Dvv"], TeXStrings["Dv"], tooltip);
-      setGUIControllerName(controllers["Dww"], TeXStrings["Dw"], tooltip);
-      setGUIControllerName(controllers["Dqq"], TeXStrings["Dq"], tooltip);
+    // Reaction term and timescale names. reactionTokenOfSpecies/timescaleTag already handle
+    // the species 1-4 (legacy letter-keyed) vs 5-8 (numeric-suffixed) key-naming split.
+    for (let i = 1; i <= MAX_SPECIES_SUPPORTED; i++) {
+      const s = defaultSpecies[i - 1];
+      setGUIControllerName(
+        controllers["reaction_" + i],
+        TeXStrings[reactionTokenOfSpecies(i - 1)] || s + "'",
+        tooltip,
+      );
+      setGUIControllerName(
+        controllers[timescaleTag(i)],
+        TeXStrings[timescaleTag(i)] || "T_" + s,
+        tooltip,
+      );
     }
-    setGUIControllerName(controllers["f"], TeXStrings["UFUN"], tooltip);
-    setGUIControllerName(controllers["g"], TeXStrings["VFUN"], tooltip);
-    setGUIControllerName(controllers["h"], TeXStrings["WFUN"], tooltip);
-    setGUIControllerName(controllers["j"], TeXStrings["QFUN"], tooltip);
 
-    setGUIControllerName(controllers["TU"], TeXStrings["TU"], tooltip);
-    setGUIControllerName(controllers["TV"], TeXStrings["TV"], tooltip);
-    setGUIControllerName(controllers["TW"], TeXStrings["TW"], tooltip);
-    setGUIControllerName(controllers["TQ"], TeXStrings["TQ"], tooltip);
-
-    // Configure the names of algebraic controllers.
-    if (algebraicV) {
-      setGUIControllerName(controllers["Dvu"], TeXStrings["Dvu"], Vtooltip);
-      setGUIControllerName(controllers["Dvw"], TeXStrings["Dvw"], Vtooltip);
-      setGUIControllerName(controllers["Dvq"], TeXStrings["Dvq"], Vtooltip);
-      setGUIControllerName(controllers["g"], TeXStrings["VFUN"], Vtooltip);
-      controllers["Dvv"].hide();
-    }
-    if (algebraicW) {
-      setGUIControllerName(controllers["Dwu"], TeXStrings["Dwu"], Wtooltip);
-      setGUIControllerName(controllers["Dwv"], TeXStrings["Dwv"], Wtooltip);
-      setGUIControllerName(controllers["Dwq"], TeXStrings["Dwq"], Wtooltip);
-      setGUIControllerName(controllers["h"], TeXStrings["WFUN"], Wtooltip);
-      controllers["Dww"].hide();
-    }
-    if (algebraicQ) {
-      setGUIControllerName(controllers["Dqu"], TeXStrings["Dqu"], Qtooltip);
-      setGUIControllerName(controllers["Dqv"], TeXStrings["Dqv"], Qtooltip);
-      setGUIControllerName(controllers["Dqw"], TeXStrings["Dqw"], Qtooltip);
-      setGUIControllerName(controllers["j"], TeXStrings["QFUN"], Qtooltip);
-      controllers["Dqq"].hide();
+    // Configure the names/visibility of algebraic species' controllers: retitle their
+    // diffusion row (against every other species) and reaction term with a tooltip that
+    // omits their own name from the "function of ..." list, and hide their self-diffusion
+    // controller entirely (an algebraic species has no diffusion term).
+    //
+    // NOTE (pre-existing behaviour, preserved as-is by this loop, not fixed here): the
+    // per-species tooltip lookup below reuses Vtooltip/Wtooltip/Qtooltip exactly as they were
+    // before this was a loop - but Wtooltip actually omits species 4 (q) rather than species 3
+    // (w), and Qtooltip omits species 3 (w) rather than species 4 (q) (see their definitions
+    // above) - so an algebraic w or q's tooltip currently omits the wrong species' name.
+    // Species 5-8 never got a name-omitting tooltip at all; they always use the plain
+    // `tooltip`. Flagging both as a separate, likely-wanted follow-up fix.
+    const algebraicTooltips = [tooltip, Vtooltip, Wtooltip, Qtooltip];
+    for (let s = 1; s < MAX_SPECIES_SUPPORTED; s++) {
+      if (!isSpeciesAlgebraic(s)) continue;
+      const i = s + 1; // 1-based species number.
+      const algTooltip = algebraicTooltips[s] ?? tooltip;
+      for (let j = 1; j <= MAX_SPECIES_SUPPORTED; j++) {
+        if (j === i) continue;
+        const texKey =
+          i <= 4 && j <= 4
+            ? "D" + defaultSpecies[i - 1] + defaultSpecies[j - 1]
+            : defaultSpecies[i - 1].toUpperCase() +
+              defaultSpecies[j - 1].toUpperCase();
+        setGUIControllerName(
+          controllers[diffCtrlKey(i, j)],
+          TeXStrings[texKey] || "D_" + i + "_" + j,
+          algTooltip,
+        );
+      }
+      setGUIControllerName(
+        controllers["reaction_" + i],
+        TeXStrings[reactionTokenOfSpecies(s)] || defaultSpecies[s] + "'",
+        algTooltip,
+      );
+      controllers[diffCtrlKey(i, i)].hide();
     }
 
     // Set the names of the BCs and ICs controllers.
-    setGUIControllerName(controllers["uBCs"], TeXStrings["u"]);
-    setGUIControllerName(controllers["vBCs"], TeXStrings["v"]);
-    setGUIControllerName(controllers["wBCs"], TeXStrings["w"]);
-    setGUIControllerName(controllers["qBCs"], TeXStrings["q"]);
-    setGUIControllerName(controllers["dirichletU"], TeXStrings["uD"]);
-    setGUIControllerName(controllers["dirichletV"], TeXStrings["vD"]);
-    setGUIControllerName(controllers["dirichletW"], TeXStrings["wD"]);
-    setGUIControllerName(controllers["dirichletQ"], TeXStrings["qD"]);
-    setGUIControllerName(controllers["neumannU"], TeXStrings["uN"]);
-    setGUIControllerName(controllers["neumannV"], TeXStrings["vN"]);
-    setGUIControllerName(controllers["neumannW"], TeXStrings["wN"]);
-    setGUIControllerName(controllers["neumannQ"], TeXStrings["qN"]);
-    setGUIControllerName(controllers["robinU"], TeXStrings["uN"]);
-    setGUIControllerName(controllers["robinV"], TeXStrings["vN"]);
-    setGUIControllerName(controllers["robinW"], TeXStrings["wN"]);
-    setGUIControllerName(controllers["robinQ"], TeXStrings["qN"]);
-    setGUIControllerName(controllers["initCond_1"], TeXStrings["uInit"]);
-    setGUIControllerName(controllers["initCond_2"], TeXStrings["vInit"]);
-    setGUIControllerName(controllers["initCond_3"], TeXStrings["wInit"]);
-    setGUIControllerName(controllers["initCond_4"], TeXStrings["qInit"]);
+    for (let i = 1; i <= MAX_SPECIES_SUPPORTED; i++) {
+      const s = defaultSpecies[i - 1];
+      const S = s.toUpperCase();
+      setGUIControllerName(controllers[s + "BCs"], TeXStrings[s] || s);
+      setGUIControllerName(
+        controllers["dirichlet" + S],
+        TeXStrings[s + "D"] || s + " (Dirichlet)",
+      );
+      setGUIControllerName(
+        controllers["neumann" + S],
+        TeXStrings[s + "N"] || s + " (Neumann)",
+      );
+      setGUIControllerName(
+        controllers["robin" + S],
+        TeXStrings[s + "N"] || s + " (Robin)",
+      );
+      setGUIControllerName(
+        controllers["initCond_" + i],
+        TeXStrings[s + "Init"] || s + "(x,y,0)",
+      );
+    }
 
     // Configure timestepping folder for automata mode.
     let controller = controllers["numTimestepsPerFrame"];
@@ -6566,6 +7589,7 @@ async function VisualPDE(url) {
     });
     // Configure the Views GUI from options.views.
     configureViewsGUI();
+    updateViewFeatureToggleClasses();
     // Configure the stats display.
     configureStatsGUI();
     // Refresh the GUI displays.
@@ -6581,187 +7605,85 @@ async function VisualPDE(url) {
     setAlgebraicVarsFromOptions();
 
     if (options.domainViaIndicatorFun) {
-      // Only allow Dirichlet or Neumann conditions.
-      if (!["dirichlet", "neumann"].includes(options.boundaryConditions_1))
-        options.boundaryConditions_1 = "dirichlet";
-      if (!["dirichlet", "neumann"].includes(options.boundaryConditions_2))
-        options.boundaryConditions_2 = "dirichlet";
-      if (!["dirichlet", "neumann"].includes(options.boundaryConditions_3))
-        options.boundaryConditions_3 = "dirichlet";
-      if (!["dirichlet", "neumann"].includes(options.boundaryConditions_4))
-        options.boundaryConditions_4 = "dirichlet";
+      // Only allow Dirichlet or Neumann conditions. Loops over all MAX_SPECIES_SUPPORTED
+      // slots (not just the active numSpecies), matching the pre-upgrade behaviour, which
+      // unconditionally coerced species 1-4 regardless of numSpecies - any inactive slot is
+      // overwritten to "periodic" by the loop below anyway.
+      for (let i = 1; i <= MAX_SPECIES_SUPPORTED; i++) {
+        if (
+          !["dirichlet", "neumann"].includes(options["boundaryConditions_" + i])
+        ) {
+          options["boundaryConditions_" + i] = "dirichlet";
+        }
+      }
     }
 
-    // Set options that only depend on the number of species.
-    switch (parseInt(options.numSpecies)) {
-      case 1:
-        options.crossDiffusion = false;
-
-        // Ensure that u is the brush target and that the no other species is in options.whatToPlot.
-        options.whatToDraw = listOfSpecies[0];
-        if (
-          new RegExp("\\b(" + anySpeciesRegexStrs[1] + ")\\b").test(
-            options.whatToPlot,
-          )
-        ) {
-          options.whatToPlot = listOfSpecies[0];
+    // Set options that only depend on the number of species: any species with (1-based)
+    // index > numSpecies is "inactive" - its diffusion (every direction, self and cross) is
+    // zeroed, it's forced to periodic BCs with a zero IC/reaction, and any active species'
+    // reaction term referencing it is cleared. This loop is a direct generalisation of the
+    // pre-upgrade hand-written switch(numSpecies){case 1: ... case 4: break;} (see git
+    // history) - verified during the 8-species upgrade (Stage 9) to reproduce it exactly for
+    // numSpecies 1-4 (the whatToDraw/whatToPlot resets become unconditional-vs-conditional
+    // but land on the same final value; the diffusion/BC/IC/reaction zeroing matches the old
+    // per-case lists entry-for-entry). See
+    // /Users/ben/.claude/plans/8-species-upgrade-progress.md for the derivation.
+    const numSpeciesInt = parseInt(options.numSpecies);
+    if (numSpeciesInt == 1) {
+      // Cross-diffusion is meaningless with only one species.
+      options.crossDiffusion = false;
+    }
+    // Ensure the brush target and whatToPlot only reference active species.
+    if (!listOfSpecies.slice(0, numSpeciesInt).includes(options.whatToDraw)) {
+      options.whatToDraw = listOfSpecies[0];
+    }
+    if (
+      numSpeciesInt < MAX_SPECIES_SUPPORTED &&
+      new RegExp("\\b(" + anySpeciesRegexStrs[numSpeciesInt] + ")\\b").test(
+        options.whatToPlot,
+      )
+    ) {
+      options.whatToPlot = listOfSpecies[0];
+    }
+    // Zero the diffusion of any pair involving an inactive species, to prevent it from
+    // causing numerical instability (and to keep stale values from a higher numSpecies
+    // session from lingering).
+    for (let i = 1; i <= MAX_SPECIES_SUPPORTED; i++) {
+      for (let j = 1; j <= MAX_SPECIES_SUPPORTED; j++) {
+        if (i <= numSpeciesInt && j <= numSpeciesInt) continue;
+        options["diffusionStr_" + i + "_" + j] = "0";
+      }
+    }
+    // Set inactive species to be periodic, with a zero IC/reaction, to reduce computational
+    // overhead.
+    for (let i = numSpeciesInt + 1; i <= MAX_SPECIES_SUPPORTED; i++) {
+      options["boundaryConditions_" + i] = "periodic";
+      options["initCond_" + i] = "0";
+      options["reactionStr_" + i] = "0";
+    }
+    // If any active species' reaction string references an inactive species, clear it.
+    if (numSpeciesInt < MAX_SPECIES_SUPPORTED) {
+      regex = new RegExp("\\b(" + anySpeciesRegexStrs[numSpeciesInt] + ")\\b");
+      for (let i = 1; i <= numSpeciesInt; i++) {
+        if (regex.test(options["reactionStr_" + i])) {
+          options["reactionStr_" + i] = "0";
         }
-
-        // Set the diffusion of v and w to zero to prevent them from causing numerical instability.
-        options.diffusionStr_1_2 = "0";
-        options.diffusionStr_1_3 = "0";
-        options.diffusionStr_1_4 = "0";
-        options.diffusionStr_2_1 = "0";
-        options.diffusionStr_2_2 = "0";
-        options.diffusionStr_2_3 = "0";
-        options.diffusionStr_2_4 = "0";
-        options.diffusionStr_3_1 = "0";
-        options.diffusionStr_3_2 = "0";
-        options.diffusionStr_3_3 = "0";
-        options.diffusionStr_3_4 = "0";
-        options.diffusionStr_4_1 = "0";
-        options.diffusionStr_4_2 = "0";
-        options.diffusionStr_4_3 = "0";
-        options.diffusionStr_4_4 = "0";
-
-        // Set v,w, and q to be periodic to reduce computational overhead.
-        options.boundaryConditions_2 = "periodic";
-        options.initCond_2 = "0";
-        options.reactionStr_2 = "0";
-        options.boundaryConditions_3 = "periodic";
-        options.initCond_3 = "0";
-        options.reactionStr_3 = "0";
-        options.boundaryConditions_4 = "periodic";
-        options.initCond_4 = "0";
-        options.reactionStr_4 = "0";
-
-        // If the f string contains any v,w, or q references, clear it.
-        regex = new RegExp("\\b(" + anySpeciesRegexStrs[1] + ")\\b");
-        if (regex.test(options.reactionStr_1)) {
-          options.reactionStr_1 = "0";
-        }
-        break;
-      case 2:
-        // Ensure that species 1 or 2 is being displayed on the screen (and the brush target).
-        if (
-          (options.whatToDraw == listOfSpecies[2]) |
-          (options.whatToDraw == listOfSpecies[3])
-        ) {
-          options.whatToDraw = listOfSpecies[0];
-        }
-        if (
-          new RegExp("\\b(" + anySpeciesRegexStrs[2] + ")\\b").test(
-            options.whatToPlot,
-          )
-        ) {
-          options.whatToPlot = listOfSpecies[0];
-        }
-
-        // Set the diffusion of w and q to zero to prevent them from causing numerical instability.
-        options.diffusionStr_1_3 = "0";
-        options.diffusionStr_1_4 = "0";
-        options.diffusionStr_2_3 = "0";
-        options.diffusionStr_2_4 = "0";
-        options.diffusionStr_3_1 = "0";
-        options.diffusionStr_3_2 = "0";
-        options.diffusionStr_3_3 = "0";
-        options.diffusionStr_3_4 = "0";
-        options.diffusionStr_4_1 = "0";
-        options.diffusionStr_4_2 = "0";
-        options.diffusionStr_4_3 = "0";
-        options.diffusionStr_4_4 = "0";
-
-        // Set w and q to be periodic to reduce computational overhead.
-        options.boundaryConditions_3 = "periodic";
-        options.initCond_3 = "0";
-        options.reactionStr_3 = "0";
-
-        options.boundaryConditions_4 = "periodic";
-        options.initCond_4 = "0";
-        options.reactionStr_4 = "0";
-
-        // If the f or g strings contains any w or q references, clear them.
-        regex = new RegExp("\\b(" + anySpeciesRegexStrs[2] + ")\\b");
-        if (regex.test(options.reactionStr_1)) {
-          options.reactionStr_1 = "0";
-        }
-        if (regex.test(options.reactionStr_2)) {
-          options.reactionStr_2 = "0";
-        }
-        break;
-      case 3:
-        // Ensure that species 1-3 is being displayed on the screen (and the brush target).
-        if (options.whatToDraw == listOfSpecies[3]) {
-          options.whatToDraw = listOfSpecies[0];
-        }
-        if (
-          new RegExp("\\b(" + anySpeciesRegexStrs[3] + ")\\b").test(
-            options.whatToPlot,
-          )
-        ) {
-          options.whatToPlot = listOfSpecies[0];
-        }
-
-        // Set the diffusion of q to zero to prevent it from causing numerical instability.
-        options.diffusionStr_1_4 = "0";
-        options.diffusionStr_2_4 = "0";
-        options.diffusionStr_3_4 = "0";
-        options.diffusionStr_4_1 = "0";
-        options.diffusionStr_4_2 = "0";
-        options.diffusionStr_4_3 = "0";
-        options.diffusionStr_4_4 = "0";
-
-        // Set q to be periodic to reduce computational overhead.
-        options.boundaryConditions_4 = "periodic";
-        options.initCond_4 = "0";
-        options.reactionStr_4 = "0";
-
-        // If the f, g, or h strings contains any q references, clear them.
-        regex = new RegExp("\\b(" + anySpeciesRegexStrs[3] + ")\\b");
-        if (regex.test(options.reactionStr_1)) {
-          options.reactionStr_1 = "0";
-        }
-        if (regex.test(options.reactionStr_2)) {
-          options.reactionStr_2 = "0";
-        }
-        if (regex.test(options.reactionStr_3)) {
-          options.reactionStr_3 = "0";
-        }
-        break;
-      case 4:
-        break;
+      }
     }
 
-    // Configure any type-specific options.
-    switch (equationType) {
-      case 3:
-        // 2SpeciesCrossDiffusionAlgebraicV
-        options.diffusionStr_2_2 = "0";
-        break;
-      case 6:
-        // 3SpeciesCrossDiffusionAlgebraicW
-        options.diffusionStr_3_3 = "0";
-        break;
-      case 7:
-        // 3SpeciesCrossDiffusionAlgebraicVW
-        options.diffusionStr_2_2 = "0";
-        options.diffusionStr_3_3 = "0";
-        break;
-      case 10:
-        // 4SpeciesCrossDiffusionAlgebraicQ
-        options.diffusionStr_4_4 = "0";
-        break;
-      case 11:
-        // 4SpeciesCrossDiffusionAlgebraicWQ
-        options.diffusionStr_3_3 = "0";
-        options.diffusionStr_4_4 = "0";
-        break;
-      case 12:
-        // 4SpeciesCrossDiffusionAlgebraicVWQ
-        options.diffusionStr_2_2 = "0";
-        options.diffusionStr_3_3 = "0";
-        options.diffusionStr_4_4 = "0";
-        break;
+    // Algebraic species have no self-diffusion (they're not PDEs) - true regardless of
+    // whether cross diffusion is on (algebraic species no longer require it - relaxed; see
+    // the algebraicV block in setRDEquations() for why). Generalised using algebraicV/W/Q
+    // directly (species 1-4) plus algebraicSpeciesFlags[4..7] (species 5-8, Stage 6) instead
+    // of re-deriving it from equationType, since equationType has no representation for
+    // numSpecies>4.
+    if (algebraicV) options.diffusionStr_2_2 = "0";
+    if (algebraicW) options.diffusionStr_3_3 = "0";
+    if (algebraicQ) options.diffusionStr_4_4 = "0";
+    for (let s = 4; s < MAX_SPECIES_SUPPORTED; s++) {
+      if (algebraicSpeciesFlags[s]) {
+        options["diffusionStr_" + (s + 1) + "_" + (s + 1)] = "0";
+      }
     }
 
     // If we're in automata mode, specify forward Euler.
@@ -6776,6 +7698,13 @@ async function VisualPDE(url) {
 
   function updateProblem() {
     // Update the problem and any dependencies based on the current options.
+    // (De)allocate the MRT render targets before anything below - configureDimension() in
+    // particular, via resize()/resizeTextures()/postprocess() - tries to read/write them.
+    // This must run for every path that can change numSpecies, not just the GUI dropdown:
+    // loadPreset()/URL-param loading call updateProblem() too, without ever going through
+    // the dropdown's onChange handler (where this used to live, too late in the sequence
+    // and unreachable from these other paths).
+    ensureMRTRenderTargets();
     problemTypeFromOptions();
     configurePlotType();
     configureOptions();
@@ -6786,12 +7715,63 @@ async function VisualPDE(url) {
     setEquationDisplayType();
   }
 
+  // Whether species index `ind` (0-based) is currently algebraic. Species 1-4 use the
+  // algebraicV/W/Q booleans; species 5-8 use algebraicSpeciesFlags (Stage 6 of the
+  // 8-species upgrade). Shared by setEquationDisplayType()'s algebraicFlagsArr construction
+  // and the diffusion matrix popup (configureDiffusionMatrixGUI), both of which need to know
+  // which species have no self-diffusion term.
+  function isSpeciesAlgebraic(ind) {
+    if (ind === 1) return algebraicV;
+    if (ind === 2) return algebraicW;
+    if (ind === 3) return algebraicQ;
+    if (ind >= 4) return !!algebraicSpeciesFlags[ind];
+    return false;
+  }
+
   function setEquationDisplayType() {
     // Given an equation type (specified as an integer selector), set the type of
     // equation in the UI element that displays the equations.
-    let str = equationTEX[equationType];
+    const numSpeciesInt = parseInt(options.numSpecies);
+    let str;
+    // The 13-entry hand-written equationTEX array only enumerates every
+    // numSpecies/crossDiffusion/algebraic combination up to 4 species that was reachable
+    // when algebraic species required cross-diffusion to be on (problemTypeFromOptions()
+    // never assigns an "algebraic" equationType when crossDiffusion is off). Now that
+    // algebraic species no longer require cross-diffusion (relaxed - see the algebraicV
+    // block in setRDEquations() for why), that combination has no hand-written entry either -
+    // build it generatively instead, exactly as already done for numSpecies>4 (8-species
+    // upgrade, Stage 10). Uses the same default-notation-placeholder convention as
+    // equationTEXFun()'s output, so everything below (custom-equation splicing, custom-name
+    // substitution, TeX post-processing) applies uniformly regardless of which path produced
+    // `str`.
+    const needsGenerativeTEX =
+      numGroups(numSpeciesInt) > 1 ||
+      (!options.crossDiffusion && options.numAlgebraicSpecies > 0);
+    if (needsGenerativeTEX) {
+      const algebraicFlagsArr = Array.from({ length: numSpeciesInt }, (_, i) =>
+        isSpeciesAlgebraic(i),
+      );
+      str = buildEquationTEX(
+        defaultSpecies.slice(0, numSpeciesInt),
+        defaultReactions.slice(0, numSpeciesInt),
+        options.crossDiffusion,
+        algebraicFlagsArr,
+      );
+    } else {
+      str = equationTEX[equationType];
+    }
 
     let regex;
+    // Regex-alternation fragment matching any default species name ("u5".."u8" first, since
+    // longer alternatives must be tried before their own prefixes - "u" would otherwise
+    // match first and leave a stray "5" unconsumed - matching the same
+    // sort-before-alternating precaution genAnySpeciesRegexStrs() already uses elsewhere).
+    // Used below in place of the literal [uvwq] character class, which can only ever match
+    // one of species 1-4's single-letter names and silently never matches species 5-8's
+    // multi-character ones.
+    const speciesAlt = [...defaultSpecies]
+      .sort((a, b) => b.length - a.length)
+      .join("|");
     // Define a list of strings that will be used to make regexes.
     const regexes = {};
     regexes["U"] = /\b(D_{u}) (\\vnabla u)/g;
@@ -6814,14 +7794,74 @@ async function VisualPDE(url) {
     regexes["QU"] = /\b(D_{q u}) (\\vnabla u)/g;
     regexes["QV"] = /\b(D_{q v}) (\\vnabla v)/g;
     regexes["QW"] = /\b(D_{q w}) (\\vnabla w)/g;
-    regexes["UFUN"] = /\b(UFUN)/g;
-    regexes["VFUN"] = /\b(VFUN)/g;
-    regexes["WFUN"] = /\b(WFUN)/g;
-    regexes["QFUN"] = /\b(QFUN)/g;
+    // Trailing \b anchors matter now that species 5-8 exist: without one, e.g. "UFUN"
+    // partially matches the "UFUN" prefix of "UFUN5".."UFUN8" (bug found via live testing -
+    // reaction terms for species 5-8 were getting corrupted/never substituted, since this
+    // array is processed before reactionKeys5to8 below and would consume the "UFUN" prefix
+    // out of "UFUN5" etc first, leaving a stray "5" and no "UFUN5" left to match against).
+    regexes["UFUN"] = /\b(UFUN)\b/g;
+    regexes["VFUN"] = /\b(VFUN)\b/g;
+    regexes["WFUN"] = /\b(WFUN)\b/g;
+    regexes["QFUN"] = /\b(QFUN)\b/g;
     regexes["TU"] = /\b(tau_{u})/g;
     regexes["TV"] = /\b(tau_{v})/g;
     regexes["TW"] = /\b(tau_{w})/g;
     regexes["TQ"] = /\b(tau_{q})/g;
+
+    // Species 5-8 diffusion/reaction/timescale regexes (8-species upgrade, Stage 10) -
+    // generalized since these species have no natural single letter for the hand-written
+    // entries above to be extended by hand. Keys match Stage 9's controller-naming
+    // convention exactly (diffCtrlKey's texKey, reactionTokenOfSpecies(), timescaleTags), so
+    // this list is also what buildEquationTEX()'s output (used when numSpecies>4, above) is
+    // built to be spliceable by. diffKeys5to8 is reused below by the diffusion-replacement
+    // loop.
+    //
+    // Self-diffusion (i===j) additionally gets a single-subscript key/regex (e.g. "U5",
+    // matching "D_{u5}"), mirroring the hand-written "U"/"UU" pair above: buildEquationTEX()
+    // emits the single form when cross-diffusion is off and the doubled form ("D_{u5 u5}")
+    // when it's on, so both regexes must exist for the substitution loop below to match
+    // whichever form actually appears in the generated string.
+    const diffKeys5to8 = [];
+    for (let i = 1; i <= MAX_SPECIES_SUPPORTED; i++) {
+      for (let j = 1; j <= MAX_SPECIES_SUPPORTED; j++) {
+        if (i <= 4 && j <= 4) continue;
+        const X = defaultSpecies[i - 1];
+        const Y = defaultSpecies[j - 1];
+        const key = X.toUpperCase() + Y.toUpperCase();
+        diffKeys5to8.push(key);
+        regexes[key] = new RegExp(
+          "\\b(D_{" + X + " " + Y + "}) (\\\\vnabla " + Y + ")",
+          "g",
+        );
+        if (i === j) {
+          const singleKey = X.toUpperCase();
+          diffKeys5to8.push(singleKey);
+          regexes[singleKey] = new RegExp(
+            "\\b(D_{" + X + "}) (\\\\vnabla " + X + ")",
+            "g",
+          );
+        }
+      }
+    }
+    const reactionKeys5to8 = [];
+    for (let i = 5; i <= MAX_SPECIES_SUPPORTED; i++) {
+      const tag = reactionTokenOfSpecies(i - 1);
+      reactionKeys5to8.push(tag);
+      regexes[tag] = new RegExp("\\b(" + tag + ")\\b", "g");
+    }
+    for (let i = 5; i <= MAX_SPECIES_SUPPORTED; i++) {
+      const tag = "TU" + i;
+      // No trailing \b here (unlike the reaction-token fix above): the capture group ends
+      // in "}", a non-word character, so a trailing \b would require the *next* character
+      // to be a word character to match - which it never is in practice (whitespace/"\\"
+      // follows in the generated TeX), so it would break every match. Safe without one
+      // regardless: "tau_{u}" can never be a literal prefix of "tau_{u5}" (they diverge at
+      // "}" vs "5" before the shorter pattern's boundary would even matter).
+      regexes[tag] = new RegExp(
+        "\\b(tau_{" + defaultSpecies[i - 1] + "})",
+        "g",
+      );
+    }
 
     // Define placeholders for substituting parameter names in custom-typeset equations.
     let paramNames = getKineticParamNames();
@@ -6864,10 +7904,38 @@ async function VisualPDE(url) {
       associatedStrs["TW"] = options.timescale_3;
       associatedStrs["TQ"] = options.timescale_4;
 
+      // Species 5-8 (Stage 10 of the 8-species upgrade) - mirrors the hand-written entries
+      // above; keys match diffKeys5to8/reactionKeys5to8 (built alongside regexes, above).
+      for (let i = 1; i <= MAX_SPECIES_SUPPORTED; i++) {
+        for (let j = 1; j <= MAX_SPECIES_SUPPORTED; j++) {
+          if (i <= 4 && j <= 4) continue;
+          const key =
+            defaultSpecies[i - 1].toUpperCase() +
+            defaultSpecies[j - 1].toUpperCase();
+          associatedStrs[key] = options["diffusionStr_" + i + "_" + j];
+          // Single-subscript self-diffusion key ("U5"), matching the extra single-form
+          // regex added above - same value as the doubled key, just a different pattern to
+          // match against depending on whether cross-diffusion is on or off.
+          if (i === j) {
+            associatedStrs[defaultSpecies[i - 1].toUpperCase()] =
+              options["diffusionStr_" + i + "_" + j];
+          }
+        }
+      }
+      for (let i = 5; i <= MAX_SPECIES_SUPPORTED; i++) {
+        associatedStrs[reactionTokenOfSpecies(i - 1)] =
+          options["reactionStr_" + i];
+        associatedStrs["TU" + i] = options["timescale_" + i];
+      }
+
       // Map empty strings to 0.
       Object.keys(associatedStrs).forEach(function (key) {
         if (isEmptyString(associatedStrs[key])) associatedStrs[key] = "0";
       });
+
+      // Expressions are deliberately NOT substituted into the displayed equations here (they
+      // stay as plain symbol names, e.g. "f" rather than its definition) - each gets its own
+      // row appended to the equation block instead, see appendExpressionRowsToTEX() below.
 
       // Check associatedStrs for basic syntax validity, and return without updating the TeX if there are issues.
       var badSyntax = false;
@@ -6959,6 +8027,7 @@ async function VisualPDE(url) {
         "QU",
         "QV",
         "QW",
+        ...diffKeys5to8,
       ].forEach(function (key) {
         let delims = associatedStrs[key].includes("\\dmat") ? "  " : "[]";
         str = replaceUserDefDiff(
@@ -6970,12 +8039,18 @@ async function VisualPDE(url) {
       });
 
       // Replace the reaction strings.
-      ["UFUN", "VFUN", "WFUN", "QFUN"].forEach(function (tag) {
-        str = replaceUserDefReac(str, regexes[tag], associatedStrs[tag]);
-      });
+      ["UFUN", "VFUN", "WFUN", "QFUN", ...reactionKeys5to8].forEach(
+        function (tag) {
+          str = replaceUserDefReac(str, regexes[tag], associatedStrs[tag]);
+        },
+      );
 
-      // Replace the timescale strings.
+      // Replace the timescale strings. Skip tags with no associatedStrs/regexes entry
+      // (shouldn't happen now that Stage 10 populates TU5-TU8 too, but kept as a defensive
+      // guard) rather than passing `undefined` as input, which replaceUserDefTimescale
+      // can't handle.
       timescaleTags.forEach(function (tag) {
+        if (associatedStrs[tag] === undefined) return;
         str = replaceUserDefTimescale(str, regexes[tag], associatedStrs[tag]);
       });
 
@@ -7016,22 +8091,54 @@ async function VisualPDE(url) {
       str = str.replaceAll(regex, "=0$1");
 
       // If we have [-blah] inside a divergence operator, move the minus sign outside.
-      regex =
-        /(\\vnabla\s*\\cdot\s*\()\[-([\w\{\}\(\)]*)\]\s*(\\vnabla\s*([uvwq])\s*\))/g;
+      regex = new RegExp(
+        "(\\\\vnabla\\s*\\\\cdot\\s*\\()\\[-([\\w\\{\\}\\(\\)]*)\\]\\s*(\\\\vnabla\\s*(?:" +
+          speciesAlt +
+          ")\\s*\\))",
+        "g",
+      );
       str = str.replaceAll(regex, "-$1$2$3");
 
       // Look for div(grad(blah)) and replace it with lap.
-      regex = /\\vnabla\s*\\cdot\s*\(\s*\\vnabla\s*([uvwq])\s*\)/g;
+      regex = new RegExp(
+        "\\\\vnabla\\s*\\\\cdot\\s*\\(\\s*\\\\vnabla\\s*(" +
+          speciesAlt +
+          ")\\s*\\)",
+        "g",
+      );
       str = str.replaceAll(regex, "\\lap $1");
 
       // Look for div(const * grad(blah)), and move the constant outside the bracket.
-      // Constant in space <=> it doesn't contain [xy], [uvwq](?:_[x|y|xx|yy])?, (?:I_[ST][RGBA]?).
-      // We'll also treat matrices as non-constants for typesetting.
-      regex =
-        /\\vnabla\s*\\cdot\s*\(\s*((?!\\vnabla).*)\s*\\vnabla\s*([uvwq])\s*\)/g;
+      // Constant in space <=> it doesn't contain [xy], any species name (optionally
+      // suffixed with _x/_y/_xx/_yy), (?:I_[ST][RGBA]?), or the name of any user-defined expression. We'll also treat matrices as
+      // non-constants for typesetting.
+      regex = new RegExp(
+        "\\\\vnabla\\s*\\\\cdot\\s*\\(\\s*((?!\\\\vnabla).*)\\s*\\\\vnabla\\s*(" +
+          speciesAlt +
+          ")\\s*\\)",
+        "g",
+      );
+
+      let expressionNames = getExpressionNames();
+      let expressionNameRegex = new RegExp(
+        "\\b(?:" + expressionNames.join("|") + ")\\b",
+        "g",
+      );
+      function containsExpressionName(s) {
+        if (expressionNames.length == 0) return false;
+        return expressionNameRegex.test(s);
+      }
+
       str = str.replaceAll(regex, function (match, g1, g2) {
-        const innerRegex = /\b(?:[xy]|[uvwq](?:_[xy])?|(?:I_[ST][RGBA]?))\b/g;
-        if (!innerRegex.test(g1) && !g1.includes("\\dmat")) {
+        const innerRegex = new RegExp(
+          "\\b(?:[xy]|(?:" + speciesAlt + ")(?:_[xy])?|(?:I_[ST][RGBA]?))\\b",
+          "g",
+        );
+        if (
+          !innerRegex.test(g1) &&
+          !containsExpressionName(g1) &&
+          !g1.includes("\\dmat")
+        ) {
           return g1.trim() + " \\lap " + g2;
         } else {
           return match;
@@ -7039,7 +8146,10 @@ async function VisualPDE(url) {
       });
 
       // Replace u_x, u_y etc with \pd{u}{x} etc. Add parentheses if followed by ^.
-      regex = /(\(?)\b([uvwq])_([xy])[fb]?2?\s*(\)?)\s*(\^?)\b/g;
+      regex = new RegExp(
+        "(\\(?)\\b(" + speciesAlt + ")_([xy])[fb]?2?\\s*(\\)?)\\s*(\\^?)\\b",
+        "g",
+      );
       str = str.replaceAll(regex, function (match, g1, g2, g3, g4, g5) {
         let base =
           g1 + "\\textstyle \\pd{" + g2 + "}{" + g3 + "\\vphantom{y}}" + g4;
@@ -7052,7 +8162,10 @@ async function VisualPDE(url) {
       });
 
       // Replace u_xx, u_yy etc with \pdd{u}{x} etc.
-      regex = /(\(?)\b([uvwq])_(xx|yy)\s*(\)?)\s*(\^?)\b/g;
+      regex = new RegExp(
+        "(\\(?)\\b(" + speciesAlt + ")_(xx|yy)\\s*(\\)?)\\s*(\\^?)\\b",
+        "g",
+      );
       str = str.replaceAll(regex, function (match, g1, g2, g3, g4, g5) {
         let base =
           g1 + "\\textstyle \\pdd{" + g2 + "}{" + g3[0] + "\\vphantom{y}}" + g4;
@@ -7100,9 +8213,9 @@ async function VisualPDE(url) {
     // If we're in 1D, convert \nabla to \pd{}{x} and \lap word to \pdd{word}{x}.
     if (options.dimension == 1) {
       str = str.replaceAll(/\\vnabla\s*\\cdot/g, "\\textstyle \\pd{}{x}");
-      regex = /\\vnabla\s*([uvwq])/g;
+      regex = new RegExp("\\\\vnabla\\s*(" + speciesAlt + ")", "g");
       str = str.replaceAll(regex, "\\textstyle \\pd{$1}{x}");
-      regex = /\\lap\s*([uvwq])/g;
+      regex = new RegExp("\\\\lap\\s*(" + speciesAlt + ")", "g");
       str = str.replaceAll(regex, "\\textstyle \\pdd{$1}{x}");
     }
 
@@ -7121,14 +8234,54 @@ async function VisualPDE(url) {
     // Remove default species placeholders with original default species names.
     str = replaceSymbolsInStr(str, defaultSpeciesPlaceholders, defaultSpecies);
 
+    // Append one row per defined expression (its own name and raw definition - not
+    // substituted into the equations above) before the final TeX pass below, which will
+    // typeset these rows the same way as everything else in one uniform pass.
+    str = appendExpressionRowsToTEX(str);
+
     str = parseStringToTEX(str);
 
     $("#typeset_equation").html(str);
     runMathJax()?.then(resizeEquationDisplay);
   }
 
+  /**
+   * Appends one row per defined expression whose "Show" checkbox is checked ("name &= rhs",
+   * using the expression's own raw definition, not substituted/expanded - expressions are
+   * deliberately shown as themselves here, never inlined into other equations, see
+   * setEquationDisplayType()) to the end of the aligned equation block in `str`, right before
+   * its closing "\end{aligned}$". A no-op if no expressions are defined, or none are shown.
+   */
+  function appendExpressionRowsToTEX(str) {
+    const nameVals = getExpressionNameVals().filter(([, , shown]) => shown);
+    if (nameVals.length === 0) return str;
+    const rows = nameVals
+      .map(([name, rhs]) => "\\textstyle " + name + " &= " + rhs)
+      .join("\\\\\n    ");
+    return str.replace(
+      /\s*\\end\{aligned\}\$\s*$/,
+      "\\\\\n    " + rows + "\n    \\end{aligned}$",
+    );
+  }
+
   function parseStringToTEX(str) {
     // Parse a string into valid TEX by replacing * and ^.
+
+    // Resolve each Int(...) call to an inert placeholder token immediately, before any of
+    // the transforms below get a chance to mangle the raw "Int(...)" syntax itself (in
+    // particular the \left/\right bracket-escaping pass a little further down, which would
+    // otherwise turn "Int(" into "Int\left(", making it unrecognizable). Each placeholder is
+    // swapped for its actual rendered TeX further down (see intCallPlaceholders below),
+    // after the passes that would mangle raw "Int(...)" syntax but before the ones that
+    // would mangle the placeholder token itself (e.g. the underscore/subscript passes at the
+    // end, which would otherwise treat a trailing digit as a subscript).
+    const intCallPlaceholders = [];
+    str = replaceIntCalls(str, (expr) => {
+      const placeholder = "IntCallPlaceholder" + intCallPlaceholders.length;
+      intCallPlaceholders.push([placeholder, expr]);
+      return placeholder;
+    });
+
     // If the string is surrounded by [] but doesn't contain +, -, or /, remove the brackets.
     str = str.replaceAll(/\[([^\+\/\[\]-]*)\]/g, "$1");
 
@@ -7189,16 +8342,30 @@ async function VisualPDE(url) {
     // Replace Gauss with \mathcal{N}.
     str = str.replaceAll(/\bGauss\b/g, "\\mathcal{N}");
 
-    // Replace GlobalInt with \int_{\Omega}(options.globalIntegralFun).
-    let replacement = "";
-    if (options.dimension == 1) {
-      replacement =
-        "\\int_{\\Omega} " + options.globalIntegralFun + "\\, \\d x \\ ";
-    } else {
-      replacement =
-        "\\iint_{\\Omega} " + options.globalIntegralFun + "\\, \\d x \\d y\\ ";
-    }
-    str = str.replaceAll(/\bGlobalInt\b/g, replacement);
+    // Swap each Int(...) placeholder (see the top of this function) for its actual
+    // \int_{\Omega} expression \d x \d y rendering. This must happen here - after the
+    // bracket/left-right/function-name passes above (which would otherwise mangle the raw
+    // "Int(...)" syntax before we could find it, hence resolving it into an inert
+    // placeholder up front instead) but before the underscore/subscript passes below (which
+    // would otherwise mangle the placeholder token itself). Each captured expression is
+    // itself a raw expression string (e.g. "u*v"), so it needs its own trip through
+    // parseStringToTEX (recursing here is safe - each call is a fresh, independent
+    // conversion, and intCallPlaceholders only ever holds entries for Int(...) calls that
+    // actually existed in the original string, so there's no risk of unconditionally
+    // recursing on every parseStringToTEX() call regardless of whether "Int(" was ever
+    // actually present) to get the same TeX formatting (removing "*", species substitution,
+    // etc.) as the rest of the equation. No outer parens around the integrand - matches how
+    // the rest of the equation display renders bare terms.
+    intCallPlaceholders.forEach(([placeholder, expr]) => {
+      const replacement =
+        (options.dimension == 1 ? "\\int_{\\Omega} " : "\\iint_{\\Omega} ") +
+        parseStringToTEX(expr) +
+        (options.dimension == 1 ? "\\, \\d x \\ " : "\\, \\d x \\d y\\ ");
+      // split/join rather than replaceAll, so a "$"-containing expression (e.g. a species
+      // name never actually looks like this, but a user-defined parameter safely could)
+      // can't be misread as a replaceAll() special replacement pattern.
+      str = str.split(placeholder).join(replacement);
+    });
 
     // If there's an underscore, put {} around the word that follows it.
     str = str.replaceAll(/_(\w+\b)/g, "_{$1}");
@@ -7406,316 +8573,679 @@ async function VisualPDE(url) {
     return str;
   }
 
-  function createParameterController(label, isNextParam) {
-    let controller;
+  /**
+   * Parses a whitespace-agnostic "name = definition" string (shared by Parameters and
+   * Expressions). Returns {name, rhs} or null if unparseable.
+   *
+   * @param {string} str - The definition string to parse.
+   * @returns {{name: string, rhs: string}|null}
+   */
+  function parseNamedDefinition(str) {
+    const match = str.match(/^\s*([a-zA-Z]\w*)\s*=\s*(.*)$/s);
+    if (!match) return null;
+    return { name: match[1], rhs: match[2].trim() };
+  }
 
-    // Define a function that we can use to concisely add in a slider depending on the string.
-    function createSlider() {
-      const hasChanged = controller.lastString != kineticParamsStrs[label];
-      if (!hasChanged) return;
-      controller.lastString = kineticParamsStrs[label];
-      // Remove any existing sliders is anything has changed.
-      if (controller.hasOwnProperty("slider")) {
-        // Remove any existing sliders.
-        controller.slider.remove();
-        delete controller.slider;
-        // Remove the parameterSlider class from the controller.
-        controller.domElement.closest("li").classList.remove("parameterSlider");
+  /**
+   * Builds a dependency graph {name: [otherNamesReferenced]} from a name->definition-string
+   * dict, via word-boundary scan. Shared by Parameters' numeric evaluation and Expressions'
+   * substitution ordering.
+   */
+  function buildDependencyGraph(strDict, names) {
+    const dependencies = {};
+    names.forEach((name) => {
+      dependencies[name] = names.filter(
+        (other) =>
+          other != name &&
+          new RegExp("\\b" + other + "\\b").test(strDict[name] ?? ""),
+      );
+    });
+    return dependencies;
+  }
+
+  /**
+   * Shared by evaluateDependentNumerics (Parameters) and expandDependentExpressions
+   * (Expressions): builds a dependency graph over strDict/names, checks for cyclic
+   * dependencies (reusing the generic checkForCyclicDependencies()), degrades any name
+   * involved in a cycle to `degradeValue`, then resolves every name in dependency order
+   * (each name's dependencies are always resolved before it, since
+   * checkForCyclicDependencies's DFS only marks a name "done" once all its dependencies are)
+   * via the caller-supplied `resolve` callback.
+   *
+   * @param {Object} strDict - name -> raw definition string.
+   * @param {string[]} names - The full list of names to resolve.
+   * @param {string} degradeValue - What a cyclic name's definition is replaced with.
+   * @param {function(string, string, string[], Object): void} resolve - Called once per name,
+   *   in dependency order, as (name, degradedDefStr, dependencyNames, resultDict); should set
+   *   resultDict[name].
+   * @returns {[Object, Array]} [resultDict, badNames] - badNames is a list of cyclic paths.
+   */
+  function resolveDependentDefinitions(strDict, names, degradeValue, resolve) {
+    const dependencies = buildDependencyGraph(strDict, names);
+    let doneDict = {};
+    let badNames = [];
+    for (const name of names) {
+      if (!(name in doneDict)) {
+        [doneDict, , badNames] = checkForCyclicDependencies(
+          name,
+          doneDict,
+          [name],
+          dependencies,
+          badNames,
+        );
       }
-      // If the string is of the form "name = val in [a,b]", create a slider underneath this controller with
-      // limits a,b.
-      let regex =
-        /\s*(\w+)\s*=\s*(\S*)\s*in\s*[\[\(]([0-9\.\-]+)\s*,\s*(?:([0-9\.]*)\s*,)?\s*([0-9\.\-]+)[\]\)]/;
-      let match = kineticParamsStrs[label].match(regex);
-      if (match) {
-        // Add a CSS class highlighting that this controller now contains a slider too.
-        controller.domElement.parentElement.parentElement.classList.add(
-          "parameterSlider",
-        );
-        // Create a range input object and tie it to the controller.
-        controller.slider = document.createElement("input");
-        controller.slider.classList.add("styled-slider");
-        controller.slider.classList.add("slider-progress");
-        controller.slider.type = "range";
-        controller.slider.min = match[3];
-        controller.slider.max = match[5];
-        if (
-          parseFloat(controller.slider.min) > parseFloat(controller.slider.max)
-        ) {
-          let temp = controller.slider.min;
-          controller.slider.min = controller.slider.max;
-          controller.slider.max = temp;
-        }
+    }
+    const degradedStrDict = { ...strDict };
+    badNames.forEach((path) =>
+      path.forEach((name) => (degradedStrDict[name] = degradeValue)),
+    );
+    const resultDict = {};
+    Object.keys(doneDict).forEach((name) => {
+      resolve(name, degradedStrDict[name], dependencies[name], resultDict);
+    });
+    return [resultDict, badNames];
+  }
 
-        let step;
-        // Define the step of the slider, which may or may not have been given.
-        if (match[4] == undefined) {
-          match[4] = "";
-          // Choose a step that either matches the max precision of the inputs, or
-          // splits the interval into 20, whichever is more precise.
-          controller.slider.precision =
-            Math.max(
-              parseFloat(match[2]).countDecimals(),
-              parseFloat(controller.slider.min).countDecimals(),
-              parseFloat(controller.slider.max).countDecimals(),
-            ) + 1;
-          step = Math.min(
-            (parseFloat(controller.slider.max) -
-              parseFloat(controller.slider.min)) /
-              20,
-            10 ** -controller.slider.precision,
+  /**
+   * Evaluates numeric values for a set of (possibly interdependent, but not cyclically so)
+   * definitions - used for kinetic parameters.
+   *
+   * @returns {[Object, Array]} [valDict, badNames].
+   */
+  function evaluateDependentNumerics(strDict, names) {
+    return resolveDependentDefinitions(
+      strDict,
+      names,
+      "0",
+      (name, str, deps, valDict) => {
+        deps.forEach((dep) => {
+          str = str.replaceAll(
+            new RegExp("\\b" + dep + "\\b", "g"),
+            (valDict[dep] ?? 0).toString(),
           );
-        } else {
-          controller.slider.precision =
-            Math.max(
-              parseFloat(match[2]).countDecimals(),
-              parseFloat(controller.slider.min).countDecimals(),
-              parseFloat(match[4]).countDecimals(),
-              parseFloat(controller.slider.max).countDecimals(),
-            ) + 1;
-          step = match[4];
-          match[4] += ", ";
-        }
-        controller.slider.precision = Math.min(
-          Math.max(
-            controller.slider.precision,
-            parseFloat(step).countDecimals(),
-          ),
-          10,
-        );
-        controller.slider.step = step.toString();
-
-        // Assign the initial value, which should happen after step has been defined.
-        controller.slider.value = match[2];
-
-        // Use the input event of the slider to update the controller and the simulation.
-        controller.slider.addEventListener("input", function () {
-          controller.slider.style.setProperty(
-            "--value",
-            controller.slider.value,
-          );
-          let valueRegex = /\s*(\w+)\s*=\s*(\S*)\s*/g;
-          kineticParamsStrs[label] = kineticParamsStrs[label].replace(
-            valueRegex,
-            match[1] +
-              " = " +
-              parseFloat(controller.slider.value)
-                .toFixed(controller.slider.precision)
-                .toString() +
-              " ",
-          );
-          refreshGUI(parametersFolder);
-          setKineticStringFromParams();
-          render();
-          // Update the uniforms with this new value.
-          if (setComputedUniforms() || compileErrorOccurred) {
-            // Reset the error flag.
-            compileErrorOccurred = false;
-            // If we added a new uniform, we need to remake all the shaders.
-            updateShaders();
-          }
         });
-
-        // Augment the onChange function of the controller to also update the slider.
-        controller.__oldOnFinishChange = controller.onFinishChange;
-        controller.onFinishChange = function () {
-          controller.__oldOnFinishChange();
-          controller.slider.value = match[2];
-        };
-
-        // Configure the slider's style so that it can be nicely formatted.
-        controller.slider.style.setProperty("--value", controller.slider.value);
-        controller.slider.style.setProperty("--min", controller.slider.min);
-        controller.slider.style.setProperty("--max", controller.slider.max);
-
-        // Add the slider to the DOM with an aria-label.
-        controller.slider.setAttribute("aria-label", "Custom parameter slider");
-        controller.domElement.appendChild(controller.slider);
-        // Focus the slider.
-        controller.slider.focus();
-        // Record the string for checking for changes later.
-        controller.lastString = kineticParamsStrs[label];
-      }
-    }
-    if (isNextParam) {
-      kineticParamsLabels.push(label);
-      kineticParamsStrs[label] = "";
-      controller = parametersFolder.add(kineticParamsStrs, label).name("");
-      nextParamController = controller;
-      disableAutocorrect(controller.domElement.firstChild);
-      controller.domElement.classList.add("params");
-      controller.onFinishChange(function () {
-        const index = kineticParamsLabels.indexOf(label);
-        // Remove excess whitespace.
-        let str = removeWhitespace(
-          kineticParamsStrs[kineticParamsLabels.at(index)],
-        );
-        if (str == "") {
-          // If the string is empty, do nothing.
-        } else {
-          // A parameter has been added! So, we create a new controller and assign it to this parameter,
-          // delete this controller, and make a new blank controller.
-          let newController = createParameterController(
-            kineticParamsLabels.at(index),
-            false,
+        try {
+          valDict[name] = parser.evaluate(str);
+        } catch (error) {
+          throwError(
+            "Unable to evaluate the definition of " +
+              name +
+              ". Please check for syntax errors or undefined parameters.",
           );
-          // We record the name of the parameter in the controller.
-          const match = str.match(/\s*(\w+)\s*=/);
-          if (match) {
-            let name = match[1];
-            validateParamName(name);
-            newController.lastName = name;
-            kineticNameToCont[name] = newController;
-          }
-          kineticParamsCounter += 1;
-          let newLabel = "params" + kineticParamsCounter;
-          this.remove();
-          createParameterController(newLabel, true);
-          // Update the uniforms, the kinetic string for saving and, if we've added something that we've not seen before, update the shaders.
-          setKineticStringFromParams();
-          if (setComputedUniforms() || compileErrorOccurred) {
-            // Reset the error flag.
-            compileErrorOccurred = false;
-            updateShaders();
-          }
+          valDict[name] = 0;
         }
-      });
+      },
+    );
+  }
+
+  /**
+   * Fully expands a set of (possibly interdependent, but not cyclically so) text-macro
+   * definitions - used for expressions. Each name's definition has every expression name it
+   * references replaced by that name's own (already fully expanded) definition, parenthesized
+   * for precedence safety.
+   *
+   * @returns {[Object, Array]} [expandedDict, badNames].
+   */
+  function expandDependentExpressions(strDict, names) {
+    return resolveDependentDefinitions(
+      strDict,
+      names,
+      "0.0",
+      (name, str, deps, expandedDict) => {
+        deps.forEach((dep) => {
+          str = str.replaceAll(
+            new RegExp("\\b" + dep + "\\b", "g"),
+            "(" + (expandedDict[dep] ?? "0.0") + ")",
+          );
+        });
+        expandedDict[name] = str;
+      },
+    );
+  }
+
+  /**
+   * Creates and wires a single controller within a "definitions list" folder (Parameters or
+   * Expressions): a dat.gui text controller bound to `ctx.strs[label]`, handling whitespace
+   * trimming, deleting itself (and its name registration) when emptied, parsing/validating/
+   * registering its name when non-empty, and - if this is the trailing "next" (always-empty)
+   * controller and the user just filled it in - promoting itself into a real controller and
+   * creating a fresh trailing empty one. (dat.gui controllers can't be converted between
+   * "next" and "normal" behaviour in place, so promotion adds a new controller for the same
+   * label and removes the old one.)
+   *
+   * @param {Object} ctx - Bundles one feature's mutable state: {folder, strs, labels,
+   *   nameToCont, labelPrefix, getCounter, setCounter, setNext}. strs/labels/nameToCont are
+   *   held by reference and only ever mutated in place here (never reassigned), so a ctx
+   *   stays valid for as long as its resulting controllers do - safe even across an external
+   *   full reset of the owning feature's outer variables (which always happens as a prelude
+   *   to a full rebuild that removes those controllers anyway).
+   * @param {string} label - The (internal, not user-visible) key into ctx.strs.
+   * @param {boolean} isNext - Whether this is the trailing always-empty "add new" controller.
+   * @param {Object} hooks - Feature-specific behaviour: {ariaLabel, placeholder,
+   *   validateName(name), afterChange(isPromotion), onDeleted(name),
+   *   extraControllerSetup(controller, str)}.
+   * @returns {dat.GUI controller}
+   */
+  function createDefinitionController(ctx, label, isNext, hooks) {
+    let controller;
+    if (isNext) {
+      ctx.labels.push(label);
+      ctx.strs[label] = "";
+      controller = ctx.folder.add(ctx.strs, label).name("");
+      ctx.setNext(controller);
     } else {
-      controller = parametersFolder.add(kineticParamsStrs, label).name("");
-      disableAutocorrect(controller.domElement.firstChild);
-      controller.domElement.classList.add("params");
-      const match = kineticParamsStrs[label].match(/\s*(\w+)\s*=/);
-      if (match) {
-        let name = match[1];
-        validateParamName(name);
-        controller.lastName = name;
-        kineticNameToCont[name] = controller;
-      }
-      controller.onFinishChange(function () {
-        // Remove excess whitespace.
-        let str = removeWhitespace(kineticParamsStrs[label]);
-        if (str == "") {
-          // If the string is empty, delete this controller and any associated slider.
-          if (
-            controller.domElement
-              .closest("li")
-              .hasOwnProperty("parameterSlider")
-          ) {
-            // Remove any existing sliders.
-            controller.slider.remove();
-            // Remove the parameterSlider class from the controller.
-            controller.domElement
-              .closest("li")
-              .classList.remove("parameterSlider");
-          }
-          this.remove();
-          // Remove the associated label and the (empty) kinetic parameters string.
-          const index = kineticParamsLabels.indexOf(label);
-          kineticParamsLabels.splice(index, 1);
-          delete kineticParamsStrs[label];
-          // Remove any uniform created with this parameter name.
-          if (
-            controller.hasOwnProperty("lastName") &&
-            !isReservedName(controller.lastName)
-          ) {
-            delete uniforms[controller.lastName];
-          }
-        } else {
-          // Otherwise, check if we need to create/modify a slider.
-          createSlider();
-          // Check if we need to update the parameter name and remove a redundant uniform.
-          const match = str.match(/\s*(\w+)\s*=/);
-          if (match) {
-            let name = match[1];
-            validateParamName(name);
-            if (
-              controller.hasOwnProperty("lastName") &&
-              controller.lastName != name &&
-              !isReservedName(controller.lastName)
-            ) {
-              delete uniforms[controller.lastName];
-              controller.lastName = name;
-              kineticNameToCont[name] = controller;
-            }
-          }
-        }
-        // Update the uniforms, the kinetic string for saving and, if we've added something that we've not seen before, update the shaders.
-        setKineticStringFromParams();
-        if (setComputedUniforms()) {
-          updateShaders();
-        }
-      });
+      controller = ctx.folder.add(ctx.strs, label).name("");
+      registerParsedName(ctx, controller, ctx.strs[label], hooks);
     }
-    // Now that we've made the required controller, check the current string to see if
-    // the user has requested that we make other types of controller (e.g. a slider).
-    createSlider();
-    // Disable autocorrect on the controller.
     disableAutocorrect(controller.domElement.firstChild);
-    // Add an aria-label.
+    controller.domElement.classList.add("params");
     controller.domElement.firstChild.setAttribute(
       "aria-label",
-      "Custom parameter definition",
+      hooks.ariaLabel,
     );
-    // Return the controller in case it is needed.
+    controller.domElement.firstChild.setAttribute(
+      "placeholder",
+      hooks.placeholder,
+    );
+
+    controller.onFinishChange(function () {
+      // Normalise what was just typed, exactly as every other expression field does. Must
+      // run before the empty-string checks below: autoCorrectSyntax turns "" into "0", which
+      // would stop an emptied row ever being deleted.
+      const corrected = autoCorrectDefinition(ctx.strs[label]);
+      if (corrected != ctx.strs[label]) controller.setValue(corrected);
+      const str = removeWhitespace(ctx.strs[label]);
+      if (isNext) {
+        // If the string is empty, do nothing.
+        if (str == "") return;
+        // A definition has been added! Create a new controller and assign it to this
+        // (now-filled-in) label, remove this one, and make a fresh blank one.
+        createDefinitionController(ctx, label, false, hooks);
+        controller.remove();
+        ctx.setCounter(ctx.getCounter() + 1);
+        createDefinitionController(
+          ctx,
+          ctx.labelPrefix + ctx.getCounter(),
+          true,
+          hooks,
+        );
+        hooks.afterChange(true);
+      } else if (str == "") {
+        // The string is empty: delete this controller (its slider, if any, is a DOM
+        // descendant of the controller and is removed along with it).
+        controller.remove();
+        ctx.labels.splice(ctx.labels.indexOf(label), 1);
+        delete ctx.strs[label];
+        if (controller.lastName) {
+          hooks.onDeleted(controller.lastName);
+          delete ctx.nameToCont[controller.lastName];
+        }
+        hooks.afterChange(false);
+      } else {
+        hooks.extraControllerSetup?.(controller, str);
+        registerParsedName(ctx, controller, str, hooks);
+        hooks.afterChange(false);
+      }
+    });
+
+    hooks.extraControllerSetup?.(controller, ctx.strs[label]);
     return controller;
   }
 
-  function setParamsFromKineticString() {
-    // Take the kineticParams string in the options and
-    // use it to populate a GUI containing these parameters
-    // as individual options.
-    let label,
-      str,
-      newLabels = [];
-    // Reset the kinetic parameters.
-    kineticParamsCounter = 0;
-    kineticParamsLabels = [];
-    kineticParamsStrs = {};
-    kineticNameToCont = {};
-    // Remove all existing controllers from the parameters folder.
-    let existingControllers = parametersFolder.__controllers.slice();
-    existingControllers.forEach(function (controller) {
-      controller.remove();
-    });
-    nextParamController = null;
+  /**
+   * Parses `str` as "name = ...", validates the name (hooks.validateName), and registers/
+   * updates ctx.nameToCont + controller.lastName accordingly. A no-op if unparseable/invalid.
+   */
+  function registerParsedName(ctx, controller, str, hooks) {
+    const parsed = parseNamedDefinition(str);
+    if (!parsed || !hooks.validateName(parsed.name)) return;
+    if (controller.lastName && controller.lastName != parsed.name) {
+      delete ctx.nameToCont[controller.lastName];
+    }
+    controller.lastName = parsed.name;
+    ctx.nameToCont[parsed.name] = controller;
+  }
 
-    let strs = options.kineticParams.split(";");
-    for (var index = 0; index < strs.length; index++) {
-      str = removeWhitespace(strs[index]);
-      if (str == "") {
-        // If the string is empty, do nothing.
-      } else {
-        // Add whitespace to the string around "=".
-        str = str.replace(/(\S)=/, "$1 =");
-        str = str.replace(/=(\S)/, "= $1");
-        // Add whitespace after commas.
-        str = str.replaceAll(/,(\S)/g, ", $1");
-        label = "param" + kineticParamsCounter;
-        kineticParamsCounter += 1;
-        kineticParamsLabels.push(label);
-        kineticParamsStrs[label] = str;
-        newLabels.push(label);
+  /**
+   * Rebuilds a "definitions list" folder from scratch to match `optionsStr` (a semicolon-
+   * joined "name = definition;..." string): removes all existing controllers, clears ctx's
+   * state in place, creates one real controller per non-empty definition (in a separate loop
+   * after they're all initialised, so dependencies between them resolve correctly), then adds
+   * one trailing empty controller for adding a new definition.
+   */
+  function rebuildDefinitionsFromString(ctx, hooks, optionsStr) {
+    ctx.folder.__controllers.slice().forEach((c) => c.remove());
+    ctx.labels.length = 0;
+    Object.keys(ctx.strs).forEach((k) => delete ctx.strs[k]);
+    Object.keys(ctx.nameToCont).forEach((k) => delete ctx.nameToCont[k]);
+    ctx.setCounter(0);
+    ctx.setNext(null);
+
+    const newLabels = [];
+    optionsStr.split(";").forEach((raw) => {
+      let str = removeWhitespace(raw);
+      if (str == "") return;
+      const label = ctx.labelPrefix + ctx.getCounter();
+      ctx.setCounter(ctx.getCounter() + 1);
+      ctx.labels.push(label);
+      ctx.strs[label] = str;
+      newLabels.push(label);
+    });
+    newLabels.forEach((label) =>
+      createDefinitionController(ctx, label, false, hooks),
+    );
+    // createDefinitionController's own isNext branch pushes the label and sets strs[label]
+    // to "" itself - don't duplicate that here.
+    createDefinitionController(
+      ctx,
+      ctx.labelPrefix + ctx.getCounter(),
+      true,
+      hooks,
+    );
+  }
+
+  /**
+   * Serializes a "definitions list"'s strs dict back into a single semicolon-joined string,
+   * for storage in the corresponding options field.
+   */
+  function serializeDefinitions(strs) {
+    return Object.values(strs)
+      .map((str) => str.replaceAll(/"\s+"/g, " "))
+      .join(";");
+  }
+
+  function getParamsContext() {
+    return {
+      folder: parametersFolder,
+      strs: kineticParamsStrs,
+      labels: kineticParamsLabels,
+      nameToCont: kineticNameToCont,
+      labelPrefix: "param",
+      getCounter: () => kineticParamsCounter,
+      setCounter: (v) => (kineticParamsCounter = v),
+      setNext: (v) => (nextParamController = v),
+    };
+  }
+
+  // A function (not a `const` object) because it's referenced from setParamsFromKineticString,
+  // which initGUI() calls before this point in the file's top-to-bottom execution order would
+  // otherwise be reached - `const`/`let` bindings aren't hoisted the way `function`
+  // declarations are, so a `const` here would throw a temporal-dead-zone ReferenceError.
+  function getParamHooks() {
+    return {
+      ariaLabel: "Custom parameter definition",
+      placeholder: "Add parameter e.g. a=1 in [0,1]",
+      validateName: validateParamName,
+      onDeleted: (name) => {
+        if (!isReservedName(name)) delete uniforms[name];
+      },
+      extraControllerSetup: (controller) => syncParamSlider(controller),
+      afterChange: (isPromotion) => {
+        setKineticStringFromParams();
+        if (setComputedUniforms() || (isPromotion && compileErrorOccurred)) {
+          compileErrorOccurred = false;
+          updateShaders();
+        }
+      },
+    };
+  }
+
+  /**
+   * Creates/updates/removes a parameter controller's slider, based on whether its current
+   * definition string is of the form "name = val in [min,(step,)max]". Reads/writes the
+   * controller's bound value via controller.object[controller.property] (dat.gui's own
+   * controller API) rather than a closed-over label, so it can be reused across every
+   * parameter controller uniformly.
+   */
+  function syncParamSlider(controller) {
+    const defStr = controller.object[controller.property];
+    if (controller.lastString == defStr) return;
+    controller.lastString = defStr;
+    // Remove any existing slider if anything has changed.
+    if (controller.slider) {
+      controller.slider.remove();
+      delete controller.slider;
+      controller.domElement.closest("li").classList.remove("parameterSlider");
+    }
+    // If the string is of the form "name = val in [a,b]", create a slider underneath this
+    // controller with limits a,b.
+    const regex =
+      /\s*(\w+)\s*=\s*(\S*)\s*in\s*[\[\(]([0-9\.\-]+)\s*,\s*(?:([0-9\.]*)\s*,)?\s*([0-9\.\-]+)[\]\)]/;
+    const match = defStr.match(regex);
+    if (!match) return;
+    // Add a CSS class highlighting that this controller now contains a slider too.
+    controller.domElement.parentElement.parentElement.classList.add(
+      "parameterSlider",
+    );
+    // Create a range input object and tie it to the controller.
+    controller.slider = document.createElement("input");
+    controller.slider.classList.add("styled-slider");
+    controller.slider.classList.add("slider-progress");
+    controller.slider.type = "range";
+    controller.slider.min = match[3];
+    controller.slider.max = match[5];
+    if (parseFloat(controller.slider.min) > parseFloat(controller.slider.max)) {
+      let temp = controller.slider.min;
+      controller.slider.min = controller.slider.max;
+      controller.slider.max = temp;
+    }
+
+    let step;
+    // Define the step of the slider, which may or may not have been given.
+    if (match[4] == undefined) {
+      match[4] = "";
+      // Choose a step that either matches the max precision of the inputs, or splits the
+      // interval into 20, whichever is more precise.
+      controller.slider.precision =
+        Math.max(
+          parseFloat(match[2]).countDecimals(),
+          parseFloat(controller.slider.min).countDecimals(),
+          parseFloat(controller.slider.max).countDecimals(),
+        ) + 1;
+      step = Math.min(
+        (parseFloat(controller.slider.max) -
+          parseFloat(controller.slider.min)) /
+          20,
+        10 ** -controller.slider.precision,
+      );
+    } else {
+      controller.slider.precision =
+        Math.max(
+          parseFloat(match[2]).countDecimals(),
+          parseFloat(controller.slider.min).countDecimals(),
+          parseFloat(match[4]).countDecimals(),
+          parseFloat(controller.slider.max).countDecimals(),
+        ) + 1;
+      step = match[4];
+      match[4] += ", ";
+    }
+    controller.slider.precision = Math.min(
+      Math.max(controller.slider.precision, parseFloat(step).countDecimals()),
+      10,
+    );
+    controller.slider.step = step.toString();
+
+    // Assign the initial value, which should happen after step has been defined.
+    controller.slider.value = match[2];
+
+    // Use the input event of the slider to update the controller and the simulation.
+    controller.slider.addEventListener("input", function () {
+      controller.slider.style.setProperty("--value", controller.slider.value);
+      const valueRegex = /\s*(\w+)\s*=\s*(\S*)\s*/g;
+      controller.object[controller.property] = controller.object[
+        controller.property
+      ].replace(
+        valueRegex,
+        match[1] +
+          " = " +
+          parseFloat(controller.slider.value)
+            .toFixed(controller.slider.precision)
+            .toString() +
+          " ",
+      );
+      refreshGUI(parametersFolder);
+      setKineticStringFromParams();
+      render();
+      // Update the uniforms with this new value.
+      if (setComputedUniforms() || compileErrorOccurred) {
+        // Reset the error flag.
+        compileErrorOccurred = false;
+        // If we added a new uniform, we need to remake all the shaders.
+        updateShaders();
       }
-    }
-    // Having defined all the parameters, create the controllers. This separate loop allows dependencies
-    // between parameters, as all parameters have been initialised by this point.
-    for (const label of newLabels) {
-      createParameterController(label, false);
-    }
-    // Finally, create an empty controller for adding parameters.
-    label = "param" + kineticParamsCounter;
-    kineticParamsLabels.push(label);
-    kineticParamsStrs[label] = str;
-    createParameterController(label, true);
+    });
+
+    // Augment the onChange function of the controller to also update the slider.
+    controller.__oldOnFinishChange = controller.onFinishChange;
+    controller.onFinishChange = function () {
+      controller.__oldOnFinishChange();
+      controller.slider.value = match[2];
+    };
+
+    // Configure the slider's style so that it can be nicely formatted.
+    controller.slider.style.setProperty("--value", controller.slider.value);
+    controller.slider.style.setProperty("--min", controller.slider.min);
+    controller.slider.style.setProperty("--max", controller.slider.max);
+
+    // Add the slider to the DOM with an aria-label.
+    controller.slider.setAttribute("aria-label", "Custom parameter slider");
+    controller.domElement.appendChild(controller.slider);
+    // Focus the slider.
+    controller.slider.focus();
+    // Record the string for checking for changes later.
+    controller.lastString = defStr;
+  }
+
+  function setParamsFromKineticString() {
+    // Take the kineticParams string in the options and use it to populate a GUI containing
+    // these parameters as individual options.
+    rebuildDefinitionsFromString(
+      getParamsContext(),
+      getParamHooks(),
+      options.kineticParams,
+    );
   }
 
   function setKineticStringFromParams() {
     // Combine the custom parameters into a single string for storage, so long as no reserved names are used.
-    options.kineticParams = Object.values(kineticParamsStrs)
-      .map(function (str) {
-        return str.replaceAll(/"\s+"/g, " ");
-      })
-      .join(";");
+    options.kineticParams = serializeDefinitions(kineticParamsStrs);
+  }
+
+  function getExpressionsContext() {
+    return {
+      folder: expressionsFolder,
+      strs: expressionsStrs,
+      labels: expressionsLabels,
+      nameToCont: expressionNameToCont,
+      labelPrefix: "expr",
+      getCounter: () => expressionsCounter,
+      setCounter: (v) => (expressionsCounter = v),
+      setNext: (v) => (nextExpressionController = v),
+    };
+  }
+
+  // A function (not a `const` object) for the same reason as getParamHooks() above.
+  function getExpressionHooks() {
+    return {
+      ariaLabel: "Custom expression definition",
+      placeholder: "Define notation e.g. f = u + 1",
+      validateName: validateExpressionName,
+      onDeleted: () => {},
+      // Expressions can never be sliders, but they do get a "Show" toggle button controlling
+      // whether they're typeset (see setupExpressionShowToggle).
+      extraControllerSetup: setupExpressionShowToggle,
+      afterChange: () => {
+        setExpressionsStringFromExpressions();
+        // Keep options.expressionsShow in sync with the current set of expression rows -
+        // see setExpressionsShowStringFromControllers for why this is always safe/cheap to
+        // just recompute from scratch here.
+        setExpressionsShowStringFromControllers();
+        // Unlike parameters (which only need a shader rebuild when a brand new uniform is
+        // added), every expression change needs a full shader reconstruction - expressions
+        // are substituted directly into shader source at construction time, not read as
+        // uniforms.
+        updateShaders();
+        setEquationDisplayType();
+      },
+    };
+  }
+
+  function setExpressionsFromString() {
+    // Take the expressions string in the options and use it to populate a GUI containing
+    // these expressions as individual options.
+    rebuildDefinitionsFromString(
+      getExpressionsContext(),
+      getExpressionHooks(),
+      options.expressions,
+    );
+    // Restore each expression's "Show" toggle from options.expressionsShow (a "1"/"0" per
+    // expression, in order - see setExpressionsShowStringFromControllers), then immediately
+    // re-derive options.expressionsShow from the result so it's always exactly as long as
+    // the current number of expressions, even if the persisted string was stale (e.g. left
+    // over from a previously-loaded preset with a different number of expressions).
+    applyExpressionsShowString(options.expressionsShow);
+  }
+
+  /**
+   * Creates the "Show" toggle button for a real (non-blank) Expression row, appended inside
+   * the controller's own domElement so - like Parameters' slider (see syncParamSlider) - it's
+   * a DOM descendant of the row and gets removed automatically when the row does (see
+   * createDefinitionController's onFinishChange). Styled like the toggle buttons elsewhere in
+   * the UI (see addToggle/.toggle_button), on by default. A no-op for the trailing always-
+   * empty "add new expression" row, and idempotent, since extraControllerSetup is invoked
+   * again on every edit of an already-set-up row, not just on creation.
+   */
+  function setupExpressionShowToggle(controller) {
+    if (controller === nextExpressionController || controller.showToggle)
+      return;
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.classList.add("toggle_button", "expr-show-toggle", "toggled_on");
+    toggle.title = "Typeset this expression in the equations display";
+    toggle.setAttribute("aria-pressed", "true");
+    toggle.textContent = "Show";
+    toggle.addEventListener("click", () => {
+      toggle.classList.toggle("toggled_on");
+      toggle.setAttribute(
+        "aria-pressed",
+        toggle.classList.contains("toggled_on").toString(),
+      );
+      setExpressionsShowStringFromControllers();
+      setEquationDisplayType();
+    });
+    controller.domElement.classList.add("hasShowToggle");
+    controller.domElement.appendChild(toggle);
+    controller.showToggle = toggle;
+  }
+
+  /**
+   * The Expressions folder's real (non-blank) controllers, in display order - i.e. those with
+   * a "Show" toggle button (see setupExpressionShowToggle), which excludes the trailing
+   * always-empty "add new expression" row.
+   */
+  function getExpressionShowToggleControllers() {
+    return expressionsFolder.__controllers.filter((c) => c.showToggle);
+  }
+
+  /**
+   * Rebuilds options.expressionsShow (one "1"/"0" char per currently-defined expression, in
+   * display order) from the live toggle-button DOM state, which is the single source of truth
+   * for "should this expression be typeset". Called on every Expressions add/remove/edit (see
+   * getExpressionHooks' afterChange) and after restoring persisted state (see
+   * applyExpressionsShowString), so the option string is always exactly as long as the
+   * current number of expressions - never longer, per the Expressions design.
+   */
+  function setExpressionsShowStringFromControllers() {
+    options.expressionsShow = getExpressionShowToggleControllers()
+      .map((c) => (c.showToggle.classList.contains("toggled_on") ? "1" : "0"))
+      .join("");
+  }
+
+  /**
+   * Applies a persisted options.expressionsShow string (see
+   * setExpressionsShowStringFromControllers) to the toggle buttons just (re)created by
+   * rebuildDefinitionsFromString - missing/extra characters default to "shown", so a shorter
+   * string (a brand new expression added since the string was saved) or longer one (fewer
+   * expressions than when it was saved) are both handled gracefully.
+   */
+  function applyExpressionsShowString(showStr) {
+    getExpressionShowToggleControllers().forEach((c, i) => {
+      const shown = !showStr || showStr[i] !== "0";
+      c.showToggle.classList.toggle("toggled_on", shown);
+      c.showToggle.setAttribute("aria-pressed", shown.toString());
+    });
+    setExpressionsShowStringFromControllers();
+  }
+
+  function setExpressionsStringFromExpressions() {
+    // Combine the custom expressions into a single string for storage, so long as no
+    // reserved names are used.
+    options.expressions = serializeDefinitions(expressionsStrs);
+  }
+
+  /**
+   * options.expressions could in principle contain surrounding whitespace per definition,
+   * but (unlike kineticParams) has no extra directives to strip - kept as a thin wrapper for
+   * symmetry with getKineticParamDefs/getExpressionNames/getExpressionNameVals below.
+   */
+  function getExpressionDefs() {
+    return options.expressions;
+  }
+
+  function getExpressionNames() {
+    const regex = /^\s*([a-zA-Z]\w*)\b/;
+    let names = [];
+    getExpressionDefs()
+      .split(";")
+      .filter((x) => x.length > 0)
+      .forEach(function (x) {
+        if (x.match(regex)) {
+          names.push(x.match(regex)[1].trim());
+        }
+      });
+    return names;
+  }
+
+  /**
+   * Returns [name, rhs, shown] triples, one per defined expression, in order. `shown` is this
+   * expression's "Show" checkbox state (see setExpressionsShowStringFromControllers), read
+   * positionally from options.expressionsShow by index into the same non-empty, semicolon-
+   * separated segments this parses - defaulting to true (shown) if that string is short (or
+   * absent), so a segment gets a sensible default even before options.expressionsShow has
+   * caught up with a just-added expression.
+   */
+  function getExpressionNameVals() {
+    const regex = /^\s*([a-zA-Z]\w*)\b\s*=\s*(.*)/;
+    const showStr = options.expressionsShow ?? "";
+    let nameVals = [];
+    getExpressionDefs()
+      .split(";")
+      .filter((x) => x.length > 0)
+      .forEach(function (x, i) {
+        const m = x.match(regex);
+        if (m) {
+          nameVals.push([m[1].trim(), m[2].trim(), showStr[i] !== "0"]);
+        } else {
+          throwError(
+            "Unable to evaluate the expression definition '" +
+              x +
+              "'. Please check for syntax errors.",
+          );
+        }
+      });
+    return nameVals;
+  }
+
+  /**
+   * Rebuilds expandedExpressionDefs (name -> fully dependency-resolved definition string),
+   * checking for duplicate/cyclic expression names first. Called once at the start of every
+   * updateShaders() - not from parseShaderString() itself, which is called many times per
+   * shader rebuild - so a cyclic/duplicate error is reported once per rebuild, not once per
+   * shader-string field. Cyclic names degrade to "0.0" (see expandDependentExpressions), so
+   * shader construction still produces valid (if temporarily wrong) GLSL.
+   */
+  function refreshExpressionExpansions() {
+    const nameVals = getExpressionNameVals();
+    const dups = getDuplicates(nameVals.map((x) => x[0]));
+    if (dups.length > 0) {
+      throwError(
+        "It looks like there are multiple definitions of '" +
+          dups.join("', '") +
+          "'. Please check your expressions to ensure everything has a unique definition.",
+      );
+    }
+    const names = nameVals.map((x) => x[0]);
+    const strDict = {};
+    nameVals.forEach((x) => (strDict[x[0]] = x[1]));
+    const [expanded, badNames] = expandDependentExpressions(strDict, names);
+    if (badNames.length > 0) {
+      throwError(
+        "Cyclic expressions detected. Please check the definition(s) of " +
+          badNames.join(", ") +
+          ". Click <a href='/user-guide/FAQ#cyclic' target='blank'>here</a> for more information.",
+      );
+    }
+    expandedExpressionDefs = expanded;
   }
 
   function addKineticParameterAfterError(paramName) {
@@ -8046,7 +9576,9 @@ async function VisualPDE(url) {
   }
 
   function computeTextureSumGPU() {
-    // Get the sum of vals in postTexture, using a shader to compute this on the GPU.
+    // Get the sum of vals in postTexture, using a shader to compute this on the GPU. Returns
+    // all 4 (r,g,b,a) channel sums at once - sumShader() sums each channel independently, so
+    // this doubles as the reduction for up to 4 simultaneous global integrals.
     simDomain.material = sumMaterial;
     minMaxUniforms.textureSource.value = postTexture.texture;
     minMaxUniforms.srcResolution.value = new THREE.Vector2(nXDisc, nYDisc);
@@ -8069,12 +9601,12 @@ async function VisualPDE(url) {
         1,
         smallBuffer,
       );
-      return smallBuffer[0];
+      return smallBuffer;
     } catch {
       alert(
         "Sadly, your configuration is not fully supported by VisualPDE. Some features may not work as expected, but we encourage you to try!",
       );
-      return 0;
+      return new Float32Array(4);
     }
   }
 
@@ -8173,6 +9705,35 @@ async function VisualPDE(url) {
     localStorage.setItem("seenFullWelcome", true);
   }
 
+  // Wraps the logic gating whether "What's new" popups should be shown, so
+  // it can diverge from shouldShowErrors() independently in future.
+  function shouldShowUpdatesMessage() {
+    return shouldShowErrors();
+  }
+
+  // Shows the "What's new" popup identified by id, provided today's date is
+  // before expiryDate and this user hasn't already dismissed it. Resolves
+  // once the user has dismissed the message (or immediately, if it's not
+  // shown). id should be unique per update, so unrelated updates each get
+  // their own localStorage entry and their own one-time showing.
+  async function showUpdatesMessage(id, expiryDate) {
+    if (
+      !shouldShowUpdatesMessage() ||
+      new Date() >= new Date(expiryDate) ||
+      localStorage.getItem("seenUpdate:" + id)
+    ) {
+      return;
+    }
+    $("#updates-message").css("display", "block");
+    await waitListener(
+      document.getElementById("updates_message_ok"),
+      "click",
+      true,
+    );
+    $("#updates-message").css("display", "none");
+    localStorage.setItem("seenUpdate:" + id, true);
+  }
+
   function waitListener(element, listenerName, val) {
     return new Promise(function (resolve, reject) {
       var listener = (event) => {
@@ -8262,9 +9823,12 @@ async function VisualPDE(url) {
       refreshGUI(rightGUI);
       domain.visible = false;
       line.visible = true;
-      options.contours = false;
-      options.emboss = false;
-      options.vectorField = false;
+      // Toggle off options that have to be toggled off, and update the current View to reflect this.
+      let keys = ["contours", "emboss", "vectorField"];
+      keys.forEach(function (key) {
+        options[key] = false;
+        updateView(key);
+      });
       configureVectorField();
     } else {
       if (wasLinePlot && options.dimension > 1) {
@@ -8280,7 +9844,12 @@ async function VisualPDE(url) {
           usingLowResDomain = false;
           replaceDisplayDomains();
         }
-        options.vectorField = false;
+        // Toggle off options that have to be toggled off, and update the current View to reflect this.
+        let keys = ["vectorField"];
+        keys.forEach(function (key) {
+          options[key] = false;
+          updateView(key);
+        });
         configureVectorField();
       } else {
         $("#simCanvas").css("outline", "");
@@ -8463,38 +10032,17 @@ async function VisualPDE(url) {
    * Returns a list of (name,value) pairs for parameters defined in a list of strings.
    * These can depend on each other, but not cyclically.
    *
-   * @param {string[]} strs - The list of strings to evaluate.
+   * @param {string[]} strs - Extra (name, value) pairs to evaluate alongside the kinetic
+   *   parameters, which are always included.
    * @returns {[string, any][]} A list of (name, value) pairs for the evaluated parameters.
    */
   function evaluateParamVals(strs) {
-    // Return a list of (name,value) pairs for parameters defined in
-    // a list of strings. These can depend on each other, but not cyclically.
-    // The kinetic parameters are always included.
-    // strs is an array of arrays of strings [[name, value]]
-    let strDict = {};
-    let valDict = {};
-    let badNames = [];
     let nameVals = getKineticParamNameVals();
-    if (strs) {
-      nameVals.push(...strs);
-    }
+    if (strs) nameVals.push(...strs);
     const names = nameVals.map((x) => x[0]);
+    const strDict = {};
     nameVals.forEach((x) => (strDict[x[0]] = x[1]));
-    for (const nameVal of nameVals) {
-      // Evaluate each parameter.
-      let [name, val] = nameVal;
-      if (!(name in valDict)) {
-        // We've not computed the value of this yet.
-        [valDict, , badNames] = evaluateParam(
-          name,
-          strDict,
-          valDict,
-          [name],
-          names,
-          [],
-        );
-      }
-    }
+    const [valDict, badNames] = evaluateDependentNumerics(strDict, names);
     // If the parameters were cyclic, throw an error.
     if (badNames.length > 0) {
       throwError(
@@ -8504,63 +10052,6 @@ async function VisualPDE(url) {
       );
     }
     return Object.keys(valDict).map((x) => [x, valDict[x]]);
-  }
-
-  /**
-   * Evaluates a parameter value based on its dependencies and returns the updated value dictionary, stack, and bad names.
-   * @param {string} name - The name of the parameter to evaluate.
-   * @param {Object} strDict - The dictionary of parameter names and their string representations.
-   * @param {Object} valDict - The dictionary of parameter names and their numeric values.
-   * @param {Array} stack - The stack of parameter names being evaluated.
-   * @param {Array} names - The list of parameter names.
-   * @param {Array} badNames - The list of parameter names that have cyclic dependencies.
-   * @returns {Array} - An array containing the updated value dictionary, stack, and bad names.
-   */
-  function evaluateParam(name, strDict, valDict, stack, names, badNames) {
-    // If we know the value already, don't do anything.
-    if (name in valDict) return [valDict, stack.slice(0, -1), badNames];
-    // Find any names in val and evaluate them.
-    let regex;
-    for (const otherName of names) {
-      // Skip the name if it's not in vals.
-      regex = new RegExp("\\b" + otherName + "\\b", "g");
-      if (!regex.test(strDict[name])) continue;
-      // Otherwise, check if it's a bad name.
-      if (stack.includes(otherName)) {
-        // We've hit a parameter that we're already trying to evaluate - cyclic!
-        // Set the value to 0 and record the name as bad so that we can throw an error.
-        valDict[otherName] = 0.0;
-        strDict[otherName] = "0";
-        strDict[name] = "0";
-        badNames.push(stack.slice(stack.indexOf(otherName)));
-      } else {
-        // Otherwise, try and evaluate the parameter and substitute the value into the expression.
-        [valDict, , badNames] = evaluateParam(
-          otherName,
-          strDict,
-          valDict,
-          [...stack, otherName],
-          names,
-          badNames,
-        );
-        strDict[name] = strDict[name].replaceAll(
-          regex,
-          valDict[otherName].toString(),
-        );
-      }
-    }
-    // Now that we've assigned all the values that we could need, parse the expression.
-    try {
-      valDict[name] = parser.evaluate(strDict[name]);
-    } catch (error) {
-      throwError(
-        "Unable to evaluate the definition of " +
-          name +
-          ". Please check for syntax errors or undefined parameters.",
-      );
-      valDict[name] = 0;
-    }
-    return [valDict, stack.slice(0, -1), badNames];
   }
 
   /**
@@ -8618,6 +10109,16 @@ async function VisualPDE(url) {
    * @returns {void}
    */
   function updateShaders() {
+    // Must run before anything below - parseShaderString() (called throughout the following
+    // builders) substitutes expression names using the map this rebuilds.
+    refreshExpressionExpansions();
+    // Likewise must run before anything below that could reference an Int(...) expression -
+    // see reconcileGlobalIntegrals(). Also called independently at the top of each of the
+    // narrower builders below, since they're each reachable directly from a field's
+    // onFinishChange without going through updateShaders() first; redundant calls here are
+    // cheap no-ops (reconcileGlobalIntegrals only does real work when the slot assignment
+    // actually changes).
+    reconcileGlobalIntegrals();
     setRDEquations();
     setClearShader();
     setProbeShader();
@@ -8718,6 +10219,10 @@ async function VisualPDE(url) {
    * Parses species names from options.
    * @returns {string[]} An array of parsed species names.
    */
+  // NB: slicing to defaultSpecies.length (now 8) means this will accept up to 8 custom
+  // names as soon as they're typed, even though the numSpecies dropdown (and everything
+  // downstream of it) is still capped at 4 until the GUI stage of the 8-species upgrade.
+  // Harmless only because nothing currently reachable from the UI can set numSpecies>4.
   function parseSpeciesNamesFromOptions() {
     return options.speciesNames
       .replaceAll(/\W+/g, " ")
@@ -9055,6 +10560,76 @@ async function VisualPDE(url) {
   }
 
   /**
+   * Sets the mouseenter handler of a dat.GUI folder's title bar (the "li.title" row that
+   * toggles the folder open/closed - not any of its child rows). Mirrors setOnfocus, but for
+   * hovering a whole folder rather than focusing a single controller - e.g. used to highlight
+   * every term a folder controls (all diffusion coefficients, all reaction terms, ...) at once.
+   *
+   * @param {dat.GUI} folder - The dat.GUI folder whose title bar should get the handler.
+   * @param {Function} fun - The function to be called on mouseenter.
+   * @param {Array} args - The arguments to be passed to the function.
+   */
+  function setOnFolderHoverEnter(folder, fun, args) {
+    folder.domElement.querySelector("li.title").onmouseenter = () => fun(args);
+  }
+
+  /**
+   * Sets the mouseleave handler of a dat.GUI folder's title bar. See setOnFolderHoverEnter.
+   *
+   * @param {dat.GUI} folder - The dat.GUI folder whose title bar should get the handler.
+   * @param {Function} fun - The function to be called on mouseleave.
+   * @param {Array} args - The arguments to be passed to the function.
+   */
+  function setOnFolderHoverLeave(folder, fun, args) {
+    folder.domElement.querySelector("li.title").onmouseleave = () => fun(args);
+  }
+
+  /**
+   * Makes a dat.GUI folder's title bar open/close correctly on a single tap on touch
+   * devices, for a folder that also has setOnFolderHoverEnter/Leave handlers wired up. On
+   * WebKit/iOS in particular, an element with a mouseenter handler has its click event
+   * deferred to a second tap (the browser treats the first tap as "simulate hovering it",
+   * only committing to "actually click it" on a second tap on the same target) - so, on such
+   * a folder, tapping only ever highlighted its TeX terms without ever toggling it open.
+   * Handling touchend explicitly - and preventing its default, which suppresses the
+   * following synthetic click - lets us toggle the folder open/closed and select/deselect
+   * its TeX highlight together, directly, on the very first tap.
+   *
+   * @param {dat.GUI} folder - The dat.GUI folder whose title bar should get the handler.
+   * @param {Function} selectFun - Called (with args) to highlight, when the folder opens.
+   * @param {Function} deselectFun - Called (with args) to un-highlight, when it closes.
+   * @param {Array} args
+   */
+  function setOnFolderTapToggle(folder, selectFun, deselectFun, args) {
+    const title = folder.domElement.querySelector("li.title");
+    // Track the touch's start position so a scroll gesture that happens to end (finger
+    // lifted) over this title bar - e.g. scrolling a tall GUI panel on a small screen -
+    // isn't misread as a tap; only a touchend close to where the touch started toggles.
+    const TAP_MOVE_THRESHOLD_PX = 10;
+    let startX, startY;
+    title.addEventListener(
+      "touchstart",
+      (e) => {
+        startX = e.changedTouches[0].clientX;
+        startY = e.changedTouches[0].clientY;
+      },
+      { passive: true },
+    );
+    title.addEventListener(
+      "touchend",
+      (e) => {
+        const dx = e.changedTouches[0].clientX - startX;
+        const dy = e.changedTouches[0].clientY - startY;
+        if (Math.hypot(dx, dy) > TAP_MOVE_THRESHOLD_PX) return;
+        e.preventDefault();
+        folder.closed = !folder.closed;
+        (folder.closed ? deselectFun : selectFun)(args);
+      },
+      { passive: false },
+    );
+  }
+
+  /**
    * Selects TeX entries with the given IDs.
    * @param {Array<string>} ids - The IDs of the TeX entries to select.
    */
@@ -9082,14 +10657,46 @@ async function VisualPDE(url) {
    */
   function getRawState() {
     stateBuffer = new Float32Array(nXDisc * nYDisc * 4);
-    renderer.readRenderTargetPixels(
-      simTextures[1],
-      0,
-      0,
-      nXDisc,
-      nYDisc,
-      stateBuffer,
-    );
+    if (numGroups(Number(options.numSpecies)) > 1) {
+      // The real state lives in mrtSimTextures once numGroups>1 (simTextures is unused -
+      // see every other Stage 3+ MRT code path). readRenderTargetPixels can't read a
+      // specific attachment from a WebGLMultipleRenderTargets directly (it assumes a
+      // single-texture render target via renderTarget.texture.format/.type, which are
+      // undefined for the array `.texture` an MRT target exposes) - so copy each
+      // attachment out to a plain scratch target with the existing copy shader first, then
+      // read that. Found/fixed as part of the 8-species upgrade's Stage 11.5 (checkpoint
+      // save/restore was previously only capturing group 0, silently dropping species 5-8).
+      stateBufferGroup1 = new Float32Array(nXDisc * nYDisc * 4);
+      const prevMaterial = simDomain.material;
+      const prevTarget = renderer.getRenderTarget();
+      const scratch = postTexture.clone();
+      assignFragmentShader(copyMaterial, copyShader());
+      copyMaterial.glslVersion = null;
+      copyMaterial.needsUpdate = true;
+      simDomain.material = copyMaterial;
+      [
+        [mrtSimTextures[1].texture[0], stateBuffer],
+        [mrtSimTextures[1].texture[1], stateBufferGroup1],
+      ].forEach(([tex, buf]) => {
+        uniforms.textureSource.value = tex;
+        renderer.setRenderTarget(scratch);
+        renderer.render(simScene, simCamera);
+        renderer.readRenderTargetPixels(scratch, 0, 0, nXDisc, nYDisc, buf);
+      });
+      scratch.dispose();
+      simDomain.material = prevMaterial;
+      renderer.setRenderTarget(prevTarget);
+    } else {
+      stateBufferGroup1 = undefined;
+      renderer.readRenderTargetPixels(
+        simTextures[1],
+        0,
+        0,
+        nXDisc,
+        nYDisc,
+        stateBuffer,
+      );
+    }
   }
 
   /**
@@ -9111,11 +10718,12 @@ async function VisualPDE(url) {
    * Saves the current simulation state in memory as a buffer and creates a texture from it.
    */
   function saveSimState() {
-    // Save the current state in memory as a buffer.
+    // Save the current state in memory as a buffer (getRawState also (re)populates
+    // stateBufferGroup1 - a Float32Array once numGroups>1, undefined otherwise).
     getRawState();
 
     // Create a texture from the state buffer.
-    createCheckpointTexture(stateBuffer);
+    createCheckpointTexture(stateBuffer, undefined, stateBufferGroup1);
 
     checkpointExists = true;
   }
@@ -9130,12 +10738,16 @@ async function VisualPDE(url) {
       saveSimState();
     }
 
-    // Download the buffer as a file, with the dimensions prepended.
+    // Download the buffer as a file, with the dimensions prepended. Group 1's (species 5-8)
+    // buffer, if present, is appended after group 0's - the file's total length beyond
+    // [header + group-0 buffer] signals its presence on load (see loadSimState), so this
+    // stays backward compatible with files exported before the 8-species upgrade without a
+    // format version bump.
+    const parts = [new Float32Array([nXDisc, nYDisc]), stateBuffer];
+    if (stateBufferGroup1 != undefined) parts.push(stateBufferGroup1);
     var link = document.createElement("a");
     link.download = "VisualPDEState";
-    link.href = URL.createObjectURL(
-      new Blob([new Float32Array([nXDisc, nYDisc]), stateBuffer]),
-    );
+    link.href = URL.createObjectURL(new Blob(parts));
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -9150,9 +10762,21 @@ async function VisualPDE(url) {
     const reader = new FileReader();
     reader.onload = function () {
       const buff = new Float32Array(reader.result);
-      // Create the stateBuffer from the data. The first two elements are width and height.
-      createCheckpointTexture(buff.slice(2), buff.slice(0, 2));
+      // The first two elements are width and height; the next width*height*4 are group 0's
+      // (species 1-4) state. A file exported with species 5-8 active (Stage 11.5 of the
+      // 8-species upgrade) has a second, equally-sized block appended after that for group 1
+      // - detected by length here (rather than a format version field) so files exported
+      // before this upgrade still load identically.
+      const dims = buff.slice(0, 2);
+      const group0Len = dims[0] * dims[1] * 4;
+      const group0Buff = buff.slice(2, 2 + group0Len);
+      const group1Buff =
+        buff.length >= 2 + 2 * group0Len
+          ? buff.slice(2 + group0Len, 2 + 2 * group0Len)
+          : undefined;
+      createCheckpointTexture(group0Buff, dims, group1Buff);
       setStretchOrCropTexture(checkpointTexture);
+      setStretchOrCropTexture(checkpointTextureGroup1);
       checkpointExists = true;
       resetSim();
     };
@@ -9188,10 +10812,16 @@ async function VisualPDE(url) {
    * If a checkpoint texture already exists, it will be disposed of before creating the new texture.
    * @param {Float32Array} buff - The buffer to use for the texture data.
    * @param {Array<number>} [dims=[nXDisc, nYDisc]] - The dimensions of the texture.
+   * @param {Float32Array} [buffGroup1] - Group 1's (species 5-8) buffer, if the checkpoint
+   *   being created has one (only once numGroups(numSpecies)>1 at capture/load time).
    */
-  function createCheckpointTexture(buff, dims) {
+  function createCheckpointTexture(buff, dims, buffGroup1) {
     if (checkpointTexture != null) {
       checkpointTexture.dispose();
+    }
+    if (checkpointTextureGroup1 != null) {
+      checkpointTextureGroup1.dispose();
+      checkpointTextureGroup1 = null;
     }
     if (dims == undefined) {
       dims = [nXDisc, nYDisc];
@@ -9211,6 +10841,19 @@ async function VisualPDE(url) {
       checkpointMaterial.map = checkpointTexture;
       checkpointMaterial.needsUpdate = true;
     }
+    if (buffGroup1 != undefined) {
+      checkpointTextureGroup1 = new THREE.DataTexture(
+        buffGroup1,
+        dims[0],
+        dims[1],
+        THREE.RGBAFormat,
+        THREE.FloatType,
+      );
+      checkpointTextureGroup1.needsUpdate = true;
+      manualInterpolationNeeded
+        ? (checkpointTextureGroup1.magFilter = THREE.NearestFilter)
+        : (checkpointTextureGroup1.magFilter = THREE.LinearFilter);
+    }
   }
 
   /**
@@ -9222,7 +10865,7 @@ async function VisualPDE(url) {
 
   /**
    * Sets the default render size based on the canvas dimensions and performance mode option.
-   
+
    * @returns {void}
    */
   function setDefaultRenderSize() {
@@ -9504,6 +11147,7 @@ async function VisualPDE(url) {
       configureProbe();
       configureVectorField();
       updateViewSliders();
+      updateViewFeatureToggleClasses();
       render();
       if (options.autoSetColourRange) {
         setColourRangeSnap();
@@ -9542,7 +11186,7 @@ async function VisualPDE(url) {
 
   /**
    * Removes the current view from the options.views array if there is more than one view. If there is only one view, renames it to "Custom".
-   
+
    * @returns {void}
    */
   function deleteView() {
@@ -9584,6 +11228,9 @@ async function VisualPDE(url) {
     if (options.activeViewInd < options.views.length)
       options.views[options.activeViewInd][property] =
         options[property]?.valueOf();
+
+    // If the property is an "enable" type, then we update a class on the folder to reflect the change.
+    updateViewFeatureToggleClasses(property);
   }
 
   /**
@@ -9694,6 +11341,27 @@ async function VisualPDE(url) {
     if (options.dimension > 1) {
       str += selectSpeciesInShaderStr(
         RDShaderDirichletY(side).replaceAll(/updated/g, "gl_FragColor"),
+        listOfSpecies[speciesInd],
+      );
+    }
+    return str;
+  }
+
+  // MRT counterpart of dirichletEnforceShader(), used only once numGroups(numSpecies)>1
+  // (Stage 11.5 of the 8-species upgrade). Deliberately skips the .replaceAll(/updated/g,
+  // "gl_FragColor") step the non-MRT version does: RDShaderDirichletX/Y already target
+  // "updated", and selectSpeciesInShaderStr's groupifyShaderStr needs that name intact to
+  // correctly retarget it to "updated2" for group-1 species - the single, final
+  // fragColor0/fragColor1 assignment happens once, in RDShaderEnforceDirichletBotMRT().
+  function dirichletEnforceShaderMRT(speciesInd, side) {
+    let str = "";
+    str += selectSpeciesInShaderStr(
+      RDShaderDirichletX(side),
+      listOfSpecies[speciesInd],
+    );
+    if (options.dimension > 1) {
+      str += selectSpeciesInShaderStr(
+        RDShaderDirichletY(side),
         listOfSpecies[speciesInd],
       );
     }
@@ -9847,14 +11515,11 @@ async function VisualPDE(url) {
 
   /**
    * Copies the current configuration as a JSON string to the clipboard, with some modifications.
-   
+
    * @returns {void}
    */
   function copyConfigAsJSON() {
-    const parentOptions = Object.assign(
-      getPreset("default"),
-      getPreset(options.parent),
-    );
+    const parentOptions = getResolvedPreset(options.parent);
 
     // Get the options that differ from the default.
     let objDiff = diffObjects(options, parentOptions);
@@ -9898,7 +11563,7 @@ async function VisualPDE(url) {
 
   /**
    * Copies debugging data to the clipboard.
-   
+
    * @returns {void}
    */
   function copyDebug() {
@@ -9980,7 +11645,7 @@ async function VisualPDE(url) {
    * @returns {boolean} Whether the screen is considered small or not.
    */
   function onSmallScreen() {
-    return window.width < 629;
+    return window.innerWidth < 629;
   }
 
   /**
@@ -10011,10 +11676,11 @@ async function VisualPDE(url) {
   }
 
   /**
-   * Returns a URL encoded string representing the current simulation configuration.
-   * @returns {string} The URL encoded string representing the current simulation configuration.
+   * Returns a compressed, URI-safe representation of the current simulation configuration,
+   * as used for the value of the `options` search parameter.
+   * @returns {string} The compressed options string.
    */
-  function getSimURL(shorten = true) {
+  function getCompressedOptions() {
     // First, get the options that differ from the default.
     let objDiff = diffObjects(options, getPreset("default"));
     objDiff.preset = "Custom";
@@ -10022,10 +11688,16 @@ async function VisualPDE(url) {
     delete objDiff.parent;
     // Minify the field names in order to generate shorter URLs.
     objDiff = minifyPreset(objDiff);
+    return LZString.compressToEncodedURIComponent(JSON.stringify(objDiff));
+  }
+
+  /**
+   * Returns a URL encoded string representing the current simulation configuration.
+   * @returns {string} The URL encoded string representing the current simulation configuration.
+   */
+  function getSimURL(shorten = true) {
     const base = location.origin + location.pathname.replace(/\/$/, "");
-    const shortOpts = LZString.compressToEncodedURIComponent(
-      JSON.stringify(objDiff),
-    );
+    const shortOpts = getCompressedOptions();
     const queryString = "?options=" + shortOpts;
     let str = [base, queryString].join("");
     // Keep the long URL as a fallback.
@@ -10034,6 +11706,110 @@ async function VisualPDE(url) {
     // Asynchronously shorten the URL, replcing the long URL with the shortened one when complete.
     if (shorten) shortenURL(base, shortOpts);
     return queryString;
+  }
+
+  /**
+   * Returns the fields of `options` that the simulation is currently tuning on the user's
+   * behalf, and which therefore shouldn't be enough on their own to replace the URL:
+   * optimiseFPS settles numTimestepsPerFrame over the first seconds of a simulation, and
+   * autoSetColourRange rewrites the colour limits several times a second for as long as
+   * it's enabled. Rewriting a tidy ?preset=... link into a long options string off the back
+   * of the first would be surprising, and off the back of the second would mean rebuilding
+   * the URL for as long as the simulation runs, and never letting it settle. The simulation
+   * overwrites both within
+   * a frame or two of the user setting them by hand, so nothing is lost by ignoring them:
+   * whatever they currently hold is still written into the URL as soon as anything else
+   * changes it.
+   * @returns {string[]} The names of the fields currently being tuned automatically.
+   */
+  function autoTunedOptionNames() {
+    return [
+      ...(isOptimising ? ["numTimestepsPerFrame"] : []),
+      ...(options.autoSetColourRange
+        ? ["minColourValue", "maxColourValue"]
+        : []),
+    ];
+  }
+
+  /**
+   * Returns a string that changes whenever the user-facing state of the simulation does,
+   * used by syncURLWithOptions() as a cheap check for whether the URL needs replacing.
+   * Fields that the simulation is tuning by itself are left out, both from options and from
+   * the copies of them that updateView() keeps in options.views.
+   * @returns {string} A fingerprint of the current state.
+   */
+  function optionsFingerprint() {
+    const autoTuned = autoTunedOptionNames();
+    if (!autoTuned.length) return JSON.stringify(options);
+    const stripped = Object.assign({}, options, {
+      views: options.views?.map(function (view) {
+        const copy = Object.assign({}, view);
+        autoTuned.forEach((key) => delete copy[key]);
+        return copy;
+      }),
+    });
+    autoTuned.forEach((key) => delete stripped[key]);
+    return JSON.stringify(stripped);
+  }
+
+  /**
+   * Replaces the URL in the address bar with one that encodes the current state of
+   * `options`, so that the URL is always ready to be copied, bookmarked or reloaded.
+   * Returns immediately if nothing has changed since the last call.
+   *
+   * `options` can change many times a second (dragging a slider, orbiting the camera,
+   * auto-scaling colour limits), so this is run on a timer rather than from each of the
+   * many places that write to `options`, and the comparatively expensive rebuilding of the
+   * URL is guarded behind a cheap check of whether anything has changed at all.
+   *
+   * @param {boolean} [immediate] - Rebuild the URL on this call rather than waiting for the
+   * state to settle first. Only for one-off changes that are known to have finished.
+   */
+  function syncURLWithOptions(immediate = false) {
+    const fingerprint = optionsFingerprint();
+    if (fingerprint == lastOptionsFingerprint) return;
+    // Wait for the state to stop changing before rebuilding the URL. A slider drag or a
+    // camera orbit writes to options on every frame, and rebuilding the URL mid-gesture
+    // costs roughly a frame on a phone, for intermediate links nobody ever sees.
+    if (!immediate && fingerprint != settlingFingerprint) {
+      settlingFingerprint = fingerprint;
+      return;
+    }
+    lastOptionsFingerprint = fingerprint;
+    const compressedOptions = getCompressedOptions();
+    if (compressedOptions == lastURLOptions) return;
+    lastURLOptions = compressedOptions;
+    // Carry over any search parameters that configure the page rather than the simulation
+    // (story, no_ui, sf, ...), preserving their original encoding. Anything that describes
+    // the state of the simulation is superseded by the new options string: that's preset,
+    // options and mini, plus view and any parameter named after a field of options, all of
+    // which are applied on top of the options string when loading and would otherwise
+    // clobber the state we're storing.
+    const otherParams = window.location.search
+      .replace(/^\?/, "")
+      .split("&")
+      .filter(function (param) {
+        if (!param.length) return false;
+        const key = decodeURIComponent(param.split("=")[0]);
+        return !stateSearchParams.includes(key) && !(key in options);
+      });
+    const queryString = ["options=" + compressedOptions]
+      .concat(otherParams)
+      .join("&");
+    history.replaceState({}, "", window.location.pathname + "?" + queryString);
+  }
+
+  /**
+   * Starts keeping the URL in sync with `options`. Called on the user's first interaction
+   * with the page, rather than on load, so that a tidy link like ?preset=GrayScott isn't
+   * replaced by a long options string just because something settled by itself after
+   * loading (optimiseFPS adjusting numTimestepsPerFrame, say).
+   */
+  function startSyncingURL() {
+    if (urlSyncTimer) return;
+    // Record the current state, so that we only replace the URL once something changes.
+    lastOptionsFingerprint = optionsFingerprint();
+    urlSyncTimer = setInterval(syncURLWithOptions, urlSyncPeriod);
   }
 
   /**
@@ -10443,17 +12219,65 @@ async function VisualPDE(url) {
   }
 
   /**
-   * Validates if a parameter name is already in use.
+   * Every name the user has declared and can legitimately write in an expression: the species,
+   * plus the Parameters and Substitutions they've defined. Used by autoCorrectSyntax to tell a
+   * single identifier from two names written side by side - "D_1r" from "u_1u_2" - which is
+   * otherwise impossible, since the two are lexically the same shape.
+   *
+   * Reactions are excluded: listOfReactions holds display forms like "f_{u}", not identifiers.
+   * Note this reads the *committed* options, so when called while a definition row is being
+   * edited it won't yet see that row's pending name - harmless, since autoCorrectDefinition
+   * only ever autocorrects a row's right-hand side, never its name.
+   */
+  function getDeclaredNames() {
+    // Tolerates options not being populated yet: with no names to go on, autoCorrectSyntax
+    // just falls back to its old blanket behaviour, which beats throwing out of a field's
+    // onFinishChange and taking the rest of that handler down with it.
+    if (options.kineticParams == undefined || options.expressions == undefined)
+      return listOfSpecies.slice();
+    return listOfSpecies
+      .concat(getKineticParamNames())
+      .concat(getExpressionNames());
+  }
+
+  /**
+   * Validates if a parameter name is already in use (as a species/reaction/reserved name, or
+   * as an existing expression name - parameters and expressions share one namespace, since a
+   * parameter is a live uniform reference while an expression is inline-substituted text, and
+   * allowing the same name in both would make substitution order silently decide which wins).
    * @param {string} name - The name of the parameter to validate.
    * @returns {boolean} - Returns true if the parameter name is not already in use, otherwise returns false.
    */
   function validateParamName(name) {
-    const val = isReservedName(name, getSpecAndReacNames());
+    const val =
+      isReservedName(name, getSpecAndReacNames()) ||
+      name in expressionNameToCont;
     if (val) {
       throwError(
         "The name '" +
           name +
           "' is already in use, so can't be used as a parameter name. Please use a different name for " +
+          name +
+          ".",
+      );
+    }
+    return !val;
+  }
+
+  /**
+   * Validates if an expression name is already in use (as a species/reaction/reserved name,
+   * or as an existing parameter name - see validateParamName for why the namespace is shared).
+   * @param {string} name - The name of the expression to validate.
+   * @returns {boolean} - Returns true if the expression name is not already in use, otherwise returns false.
+   */
+  function validateExpressionName(name) {
+    const val =
+      isReservedName(name, getSpecAndReacNames()) || name in kineticNameToCont;
+    if (val) {
+      throwError(
+        "The name '" +
+          name +
+          "' is already in use, so can't be used as an expression name. Please use a different name for " +
           name +
           ".",
       );
@@ -10510,15 +12334,6 @@ async function VisualPDE(url) {
    *
    * @returns {Array} - Returns an array containing the updated `doneDict`, `stack`, and `badNames`.
    */
-  function checkForCyclicDependencies(
-    name,
-    doneDict,
-    stack,
-    dependencies,
-    badNames,
-  ) {
-    // ...
-  }
   function checkForCyclicDependencies(
     name,
     doneDict,
@@ -10800,6 +12615,22 @@ async function VisualPDE(url) {
         ]
       : [1, 1, 1, 1];
     const toSub = "vec4(" + scales.map(parseShaderString).join(",") + ")";
+    // Used only by the MRT (>4-species) Forward Euler shader (RDShaderMainMRT). Replaced
+    // before TIMESCALES since "TIMESCALESGROUP1" contains "TIMESCALES" as a prefix and the
+    // TIMESCALES regex below has no word-boundary anchoring - doing this one first avoids it
+    // being partially consumed. A guaranteed no-op for every other shader/scheme, since only
+    // RDShaderMainMRT's text ever contains this token.
+    let scalesGroup1 = options.timescales
+      ? [
+          options.timescale_5,
+          options.timescale_6,
+          options.timescale_7,
+          options.timescale_8,
+        ]
+      : [1, 1, 1, 1];
+    const toSubGroup1 =
+      "vec4(" + scalesGroup1.map(parseShaderString).join(",") + ")";
+    str = str.replaceAll(/TIMESCALESGROUP1/g, toSubGroup1);
     return str.replaceAll(/TIMESCALES/g, toSub);
   }
 
@@ -10834,7 +12665,7 @@ async function VisualPDE(url) {
       "float(" +
       options.domainIndicatorFun +
       ")*float(textureCoords.x - step_x >= 0.0)*float(textureCoords.x + step_x <= 1.0)";
-    if (options.dimensions == 2) {
+    if (options.dimension == 2) {
       str +=
         "*float(textureCoords.y - step_y >= 0.0)*float(textureCoords.y + step_y <= 1.0)";
     }
@@ -10855,6 +12686,36 @@ async function VisualPDE(url) {
     return str.replaceAll(
       substr,
       `<span class="${highlightClass}">${substr}</span>`,
+    );
+  }
+
+  /**
+   * Adds a button to a dat.GUI folder's title bar that opens the diffusion matrix popup.
+   * Mirrors addInfoButton's DOM-injection pattern. Starts hidden - configureGUI() shows/
+   * hides it (via diffusionMatrixButton, set here) based on options.crossDiffusion and
+   * screen size.
+   *
+   * @param {dat.GUI} folder - The dat.GUI folder to add the button to.
+   */
+  function addDiffusionMatrixButton(folder) {
+    diffusionMatrixButton = document.createElement("button");
+    diffusionMatrixButton.classList.add("matrix-view", "hidden");
+    diffusionMatrixButton.innerHTML = `<i class="fa-solid fa-table-cells"></i>`;
+    diffusionMatrixButton.title = "Edit as a matrix";
+    diffusionMatrixButton.onclick = function (e) {
+      e.stopPropagation();
+      openDiffusionMatrixGUI();
+      if (!options.crossDiffusion) {
+        crossDiffusionToggle.click();
+      }
+    };
+    // Reuses has-info-link purely for its `position: relative` effect on the folder title
+    // (no actual info-link on this folder) - the same anchor every absolutely-positioned
+    // title-bar button (info-link, focus-params, combo-bcs) already relies on.
+    folder.domElement.classList.add("has-info-link");
+    folder.domElement.insertBefore(
+      diffusionMatrixButton,
+      folder.domElement.firstChild,
     );
   }
 
@@ -10882,23 +12743,23 @@ async function VisualPDE(url) {
   function addFocusLeftGUIButton(folder = parametersFolder) {
     const focusButton = document.createElement("button");
     focusButton.classList.add("focus-params");
-    focusButton.innerHTML = `<i class="fa-solid fa-eye"></i>`;
-    focusButton.title = "Focus this folder";
+    focusButton.innerHTML = `<i class="fa-solid fa-thumbtack"></i>`;
+    focusButton.title = "Pin this folder";
     focusButton.onclick = function () {
       focusButton.classList.toggle("active");
-      advancedOptionsFolder.domElement.classList.toggle("hidden-aug");
-      boundaryConditionsFolder.domElement.classList.toggle("hidden-aug");
-      editEquationsFolder.domElement.classList.toggle("hidden-aug");
-      initialConditionsFolder.domElement.classList.toggle("hidden-aug");
       parametersFolder.domElement.classList.toggle("hidden-aug");
+      expressionsFolder.domElement.classList.toggle("hidden-aug");
+      editEquationsFolder.domElement.classList.toggle("hidden-aug");
+      boundaryConditionsFolder.domElement.classList.toggle("hidden-aug");
+      initialConditionsFolder.domElement.classList.toggle("hidden-aug");
       // Repeat this toggle for the target folder.
       folder.domElement.classList.toggle("hidden-aug");
       document
         .getElementById("equation_display")
         .classList.toggle("hidden-aug");
-      document
-        .getElementById("typesetCustomEqsButtonRow")
-        .classList.toggle("hidden-aug");
+      // document
+      //   .getElementById("typesetCustomEqsButtonRow")
+      //   .classList.toggle("hidden-aug");
       leftGUI.domElement.firstChild.classList.toggle("hidden-aug");
       document.getElementById("left_ui_arrow").classList.toggle("hidden-aug");
       $(".ui.ui_button").toggleClass("hidden-aug");
@@ -10910,13 +12771,15 @@ async function VisualPDE(url) {
         $("#play").css("top", "-=50");
         $("#pause").css("top", "-=50");
         $("#erase").css("top", "-=50");
-        focusButton.title = "Unfocus this folder";
+        focusButton.innerHTML = `<i class="fa-solid fa-thumbtack-slash"></i>`;
+        focusButton.title = "Unpin this folder";
       } else {
         // Reset play, pause, and erase position.
         $("#play").css("top", "");
         $("#pause").css("top", "");
         $("#erase").css("top", "");
-        focusButton.title = "Focus this folder";
+        focusButton.innerHTML = `<i class="fa-solid fa-thumbtack"></i>`;
+        focusButton.title = "Pin this folder";
       }
     };
     folder.domElement.insertBefore(focusButton, folder.domElement.firstChild);
@@ -11028,8 +12891,28 @@ async function VisualPDE(url) {
     // If an e or E is preceded by a number or . and is followed by a - or number, repkace it with a placeholder to enable scientific notation.
     str = str.replaceAll(/([0-9\.])[eE]([0-9\-])/g, "$1__E__$2");
 
-    // If a number is followed by a letter or (, add a *.
-    str = str.replaceAll(/(\d)([a-zA-Z(])/g, "$1*$2");
+    // If a number is followed by a letter, add a *. A run of word characters that the user has
+    // actually declared - a species, parameter or expression name - is one identifier and is
+    // left alone, so CoupledCGL's parameter "D_1r" stays "D_1r" instead of being mangled into
+    // "D_1*r". Every other run keeps the old blanket behaviour, so juxtaposed names still gain
+    // their implicit multiplication ("u_1u_2" -> "u_1*u_2"): a declared name and two names
+    // written side by side are lexically identical, so the declared-name list is the only
+    // thing that can tell them apart.
+    const declaredNames = new Set(getDeclaredNames());
+    str = str.replaceAll(/\w+/g, (word) => {
+      if (declaredNames.has(word)) return word;
+      // A number written straight onto a declared name ("2D_1r") is that number times that
+      // name, not something to be split up further.
+      const numberThenName = word.match(/^(\d+)(.+)$/);
+      if (numberThenName && declaredNames.has(numberThenName[2]))
+        return numberThenName[1] + "*" + numberThenName[2];
+      return word.replaceAll(/(\d)([a-zA-Z])/g, "$1*$2");
+    });
+
+    // A digit immediately before a ( is always implicit multiplication - it can't be inside a
+    // name, and no built-in function name ends in a digit - so this needs no such guard, and
+    // still applies to declared names ("a0(x)" -> "a0*(x)").
+    str = str.replaceAll(/(\d)(\()/g, "$1*$2");
 
     // If a ) is followed by a (, add a *.
     str = str.replaceAll(/\)\(/g, ")*(");
@@ -11047,6 +12930,10 @@ async function VisualPDE(url) {
 
     // If the string contains a ) followed by a letter or number, add a *.
     str = str.replaceAll(/\)([a-zA-Z0-9])/g, ")*$1");
+
+    // If the string contains "> =" or "< =", replace with ">=" or "<=".
+    str = str.replaceAll(/>\s*=/g, ">=");
+    str = str.replaceAll(/<\s*=/g, "<=");
 
     // For each pair of single-character species names that is not itself a species name, add a *.
     const singleCharNames = listOfSpecies.filter((name) => name.length == 1);
@@ -11083,6 +12970,22 @@ async function VisualPDE(url) {
     str = str.replaceAll(/__E__/g, "e");
 
     return str;
+  }
+
+  /**
+   * autoCorrectSyntax() for a "name = definition" string (a Parameters or Substitutions row),
+   * applied to the right-hand side only. The name is deliberately left alone: autoCorrectSyntax
+   * is written for bare expressions, so it would rewrite a perfectly legal definition name like
+   * "uv" to "u*v" (implicit multiplication of two single-character species names).
+   *
+   * Returns `str` unchanged if it isn't a parseable definition, or if the right-hand side is
+   * still empty - a half-typed "a = " is left for the usual "unable to evaluate" error to
+   * report, rather than being silently turned into "a = 0" by autoCorrectSyntax's empty case.
+   */
+  function autoCorrectDefinition(str) {
+    const match = str.match(/^(\s*[a-zA-Z]\w*\s*=\s*)(.*)$/s);
+    if (!match || match[2].trim() == "") return str;
+    return match[1] + autoCorrectSyntax(match[2]);
   }
 
   /**
@@ -11227,6 +13130,139 @@ async function VisualPDE(url) {
 
   function inIframe() {
     return window.self !== window.top;
+  }
+
+  /**
+   * Opens the diffusion matrix popup (the "edit as a matrix" button on the "Diffusion
+   * coefficients" folder), refreshing its contents first so it always reflects the current
+   * species/values.
+   */
+  function openDiffusionMatrixGUI() {
+    configureDiffusionMatrixGUI();
+    fadein("#diffusionMatrix_ui");
+  }
+
+  function closeDiffusionMatrixGUI() {
+    fadeout("#diffusionMatrix_ui");
+  }
+
+  /**
+   * Rebuilds the diffusion matrix popup's grid from scratch to match the current number of
+   * species and their diffusion coefficients. Each grid cell is a plain HTML input (dat.gui
+   * controllers don't support grid layouts) that proxies straight through to the matching
+   * dat.gui controller's own setValue()/__onFinishChange() on change, so autoCorrectSyntax/
+   * setRDEquations/setEquationDisplayType all run exactly as they do for every other
+   * controller in the app, with no duplicated logic - and the "Diffusion coefficients"
+   * folder's own controllers update in lockstep.
+   */
+  function configureDiffusionMatrixGUI() {
+    const n = parseInt(options.numSpecies);
+
+    // General equation form (fixed - not per-species), using the site's existing vector/
+    // matrix TeX macros (mathjax.html): \v{} for bold vectors, \m{} for the bold matrix.
+    document.getElementById("diffusionMatrixEquation").innerHTML =
+      "$\\pd{\\v{u}}{t} = \\vnabla \\cdot (\\m{D} \\vnabla \\v{u}) + \\v{f}, \\ \\v{u} = [SPECIES]^T$".replace(
+        "SPECIES",
+        listOfSpecies
+          .slice(0, options.numSpecies)
+          .map((s) => parseStringToTEX(s))
+          .join(","),
+      );
+
+    const grid = document.getElementById("diffusionMatrixGrid");
+    grid.innerHTML = "";
+    // Columns: "D =" | left bracket | row labels | n input columns | right bracket.
+    grid.style.gridTemplateColumns =
+      "auto auto auto " + "auto ".repeat(n) + "auto";
+    // Rows: column labels | n input rows.
+    grid.style.gridTemplateRows = "auto " + "auto ".repeat(n);
+
+    function addCell(className, innerHTML, col, rowStart, rowSpan) {
+      const cell = document.createElement(className ? "div" : "span");
+      if (className) cell.className = className;
+      if (innerHTML != undefined) cell.innerHTML = innerHTML;
+      cell.style.gridColumn = col;
+      cell.style.gridRow = rowSpan ? rowStart + " / span " + rowSpan : rowStart;
+      grid.appendChild(cell);
+      return cell;
+    }
+
+    // Column-label row: column labels sit above the input columns; every other cell in this
+    // row is left empty (the row-label/"D ="/bracket columns only need content further down).
+    for (let j = 0; j < n; j++) {
+      addCell(
+        "matrix-col-label",
+        "$" + parseStringToTEX(listOfSpecies[j]) + "$",
+        4 + j,
+        1,
+      );
+    }
+
+    // "D =" and both brackets each span every input row, vertically centred.
+    addCell("matrix-equals", "$\\m{D} = $", 1, 2, n).style.alignSelf = "center";
+    addCell("matrix-bracket left", "", 2, 2, n);
+    addCell("matrix-bracket right", "", 4 + n, 2, n);
+
+    // Row labels and the actual coefficient inputs.
+    for (let i = 0; i < n; i++) {
+      addCell(
+        "matrix-row-label",
+        "$" + parseStringToTEX(listOfSpecies[i]) + "$",
+        3,
+        2 + i,
+      );
+      for (let j = 0; j < n; j++) {
+        const key = diffCtrlKey(i + 1, j + 1);
+        const fieldName = "diffusionStr_" + (i + 1) + "_" + (j + 1);
+        const input = document.createElement("input");
+        input.type = "text";
+        input.style.gridColumn = 4 + j;
+        input.style.gridRow = 2 + i;
+        if (i === j && isSpeciesAlgebraic(i)) {
+          // Mirrors showSpeciesGUIPanels/etc. hiding the self-diffusion controller entirely
+          // for an algebraic species (configureOptions() forces it to "0" and any edit here
+          // would just be silently overwritten again on the next options change).
+          input.value = "0";
+          input.disabled = true;
+          input.title = listOfSpecies[i] + " is algebraic - no self-diffusion.";
+        } else {
+          input.value = options[fieldName];
+          // Tags this input for syncDiffusionMatrixGUI() to find and refresh if the matching
+          // dat.gui controller in the left UI is edited directly while this popup is open.
+          input.dataset.field = fieldName;
+          input.addEventListener("change", function () {
+            const controller = controllers[key];
+            controller.setValue(this.value);
+            controller.__onFinishChange(controller, this.value);
+            // Reflect whatever autoCorrectSyntax normalized the value to.
+            this.value = options[fieldName];
+          });
+          input.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") this.blur();
+          });
+        }
+        grid.appendChild(input);
+      }
+    }
+
+    runMathJax();
+  }
+
+  /**
+   * If the diffusion matrix popup is currently open, refreshes its inputs' displayed values
+   * from options - keeps it in sync when a diffusion coefficient is instead edited via its
+   * usual dat.gui controller in the left UI. Cheap no-op when the popup is closed (the common
+   * case), so safe to call unconditionally from setRDEquations().
+   */
+  function syncDiffusionMatrixGUI() {
+    if (!$("#diffusionMatrix_ui").is(":visible")) return;
+    document
+      .querySelectorAll("#diffusionMatrixGrid input[data-field]")
+      .forEach((input) => {
+        if (document.activeElement !== input) {
+          input.value = options[input.dataset.field];
+        }
+      });
   }
 
   function openComboBCsGUI() {
@@ -11890,7 +13926,12 @@ async function VisualPDE(url) {
 
   function updateGlobalIntegral() {
     simDomain.material = globalIntegralMaterial;
-    uniforms.textureSource.value = simTextures[1].texture;
+    if (numGroups(Number(options.numSpecies)) > 1) {
+      uniforms.textureSource.value = mrtSimTextures[1].texture[0];
+      uniforms.textureSourceGroup1.value = mrtSimTextures[1].texture[1];
+    } else {
+      uniforms.textureSource.value = simTextures[1].texture;
+    }
     renderer.setRenderTarget(postTexture);
     renderer.render(simScene, simCamera);
     let dA;
@@ -11899,6 +13940,27 @@ async function VisualPDE(url) {
     } else if (options.dimension == 2) {
       dA = uniforms.dx.value * uniforms.dy.value;
     }
-    uniforms.globalIntegralValue.value = computeTextureSumGPU() * dA;
+    const sums = computeTextureSumGPU();
+    uniforms.globalIntegralValue1.value = sums[0] * dA;
+    uniforms.globalIntegralValue2.value = sums[1] * dA;
+    uniforms.globalIntegralValue3.value = sums[2] * dA;
+    uniforms.globalIntegralValue4.value = sums[3] * dA;
+  }
+
+  function updateViewFeatureToggleClasses(feature) {
+    if (feature && viewFeatureToggles[feature]) {
+      viewFeatureToggles[feature].classList.toggle(
+        "feature-enabled",
+        options[feature],
+      );
+      return;
+    }
+    // If no feature is specified, update all feature toggles.
+    Object.keys(viewFeatureToggles).forEach((feature) => {
+      viewFeatureToggles[feature].classList.toggle(
+        "feature-enabled",
+        options[feature],
+      );
+    });
   }
 }

@@ -4,7 +4,7 @@ Almost everything in VisualPDE is customisable. Here, we describe the basic func
 
 ## Equations ($f(x)$)
 
-VisualPDE is all about solving equations. In the Equations pane, you can view and define the problem that VisualPDE will solve for you in your browser, complete with initial and boundary conditions. More advanced settings, including variable renaming, can be found under [**Settings**](#settings).
+VisualPDE is all about solving equations. In the Equations pane, you can view and define the problem that VisualPDE will solve for you in your browser, complete with initial and boundary conditions, and configure the number and names of the variables used throughout the interface (see **Variables**, below). More advanced settings can be found under [**Settings**](#settings).
 
 ### Edit
 
@@ -17,20 +17,39 @@ Customise all the terms in the PDEs that you would like to solve using natural s
 
 - #### $D_u$, $D_v$, $D_w$, ...
 
-  Set the diffusion coefficients of all the species in the simulation. When **Cross diffusion** is enabled, you can also set interaction terms, which are written $D_{uv}$ etc. These can be functions of space ($x$, $y$), time ($t$), any of the unknowns ($u$, $v$, $w$, $q$), the size of the domain ($L$, $L_x$, $L_y$), the images ($I_S$, $I_T$) and any quantities defined in **Parameters**. See our discussion of [valid expressions](#writing-valid-expressions) for valid syntax and a list of available in-built functions.
+  Set the diffusion coefficients of all the variables in the simulation. When **Cross diffusion** is enabled, you can also set interaction terms, which are written $D_{uv}$ etc. These can be functions of space ($x$, $y$), time ($t$), any of the active variables, the size of the domain ($L$, $L_x$, $L_y$), the images ($I_S$, $I_T$) and any quantities defined in **Parameters**. See our discussion of [valid expressions](#writing-valid-expressions) for valid syntax and a list of available in-built functions.
 
   Advanced users seeking diagonal anisotropic diffusion tensors (i.e. distinct diffusion coefficients in the coordinate directions) can define two coefficients at once by separating definitions with a semicolon. For example, `1;2` sets diffusion coefficients of `1` and `2` in the $x$ and $y$ directions, respectively.
-  JSON key: `diffusionStr_i_j`: definitions, string. Defaults: `diffusionStr_1_1`: `"1"`, `diffusionStr_2_2`: `"2"`, `diffusionStr_3_3`: `"0"`.
+  JSON key: `diffusionStr_i_j`: definitions, string, `i` and `j` each ranging from `1` to `8` (matching the current `# variables`). Defaults: `diffusionStr_1_1`: `"1"`, `diffusionStr_2_2`: `"2"`, `diffusionStr_3_3`: `"0"`.
 
 - #### $f_u$, $f_v$, $f_w$, ...
 
-  Define the inhomogeneities in the equations. These can be functions of space ($x$, $y$), time ($t$), any of the unknowns ($u$, $v$, $w$, $q$), the size of the domain ($L$, $L_x$, $L_y$), the images ($I_S$, $I_T$), and any quantities defined in **Parameters**. See our discussion of [valid expressions](#writing-valid-expressions) for valid syntax and a list of available in-built functions.
+  Define the inhomogeneities in the equations. These can be functions of space ($x$, $y$), time ($t$), any of the active variables, the size of the domain ($L$, $L_x$, $L_y$), the images ($I_S$, $I_T$), and any quantities defined in **Parameters**. See our discussion of [valid expressions](#writing-valid-expressions) for valid syntax and a list of available in-built functions.
 
   Advanced users can also make careful use of `RAND`, a uniformly random value in $[0,1]$, and `RANDN`, a normally distributed random number with unit variance and zero mean. This converts the equations into [stochastic partial differential equations](https://en.wikipedia.org/wiki/Stochastic_partial_differential_equation), which should only be solved using the Forward Euler timestepping scheme. Both `RAND` and `RANDN` require manually dividing by `sqrt(dt)` in non-algebraic equations so that the scheme resembles the [Euler-Maruyama method](https://en.wikipedia.org/wiki/Euler–Maruyama_method). The solution under other timestepping schemes is undefined.
 
   For convenience, we define `WhiteNoise` to be a normally distributed random variable with unit variance and zero mean, scaled by $1/\sqrt{\Delta t\Delta x^N}$ where $N=1,2$ is the spatial dimension. This scales appropriately with timestep and spatial step and is suitable for direct use in PDEs, such as in our [stochastic example](/nonlinear-physics/stochastic-pdes). You can use up to 4 independent WhiteNoise terms using the syntax `WhiteNoise_1`, `WhiteNoise_2`, `WhiteNoise_3` and `WhiteNoise_4`.
 
-  JSON key: `reactionStr_1` ... `reactionStr_4`: definitions, string. Defaults: `reactionStr_1`: `"u^2*v - (a+b)*u"`, `reactionStr_2`: `"-u^2*v + a*(1 - v)"`, `reactionStr_3`: `"0"`.
+  JSON key: `reactionStr_1` ... `reactionStr_8`: definitions, string. Defaults: `reactionStr_1`: `"u^2*v - (a+b)*u"`, `reactionStr_2`: `"-u^2*v + a*(1 - v)"`, `reactionStr_3`: `"0"`.
+
+- #### Variables
+
+  Configure the number and names of the variables used throughout VisualPDE.
+
+  - ##### \# variables
+
+    Specify the number of unknowns (1 to 8) in the simulation.
+    JSON key: `numVariables`, one of `1`, `2`, `3`, `4`, `5`, `6`, `7` or `8`. Default: `2`.
+
+  - ##### \# algebraic
+
+    Choose how many equations you want to be in algebraic form in systems with cross diffusion enabled. The equations will be put in algebraic form in reverse order, e.g. an 8-variables system with 1 algebraic variables will convert the final equation to be algebraic.
+    JSON key: `numAlgebraicVariables`, one of `0`, `1`, `2`, `3`, `4`, `5`, `6` or `7`. Default: `0`.
+
+  - ##### Variables names
+
+    Specify custom names for the variables in VisualPDE. When changing "# variables" to a higher number than the variables names previously provided cover, any additional variables will be named by default to `VARIABLE2`, `VARIABLE3`, ..., `VARIABLE8` (whichever position they fall in). Names can be multi-character and can include letters, numbers, and underscores, but must each be a single 'word'. For example, `T_01` is a valid name (rendered as $T_{01}$) whilst `T 01` is not. Space or commas can be used to separate names in the list. Certain names are reserved under the hood, such as `H` for the Heaviside function, but VisualPDE will warn you if you attempt to use a reserved name. VisualPDE will automatically substitute the names of old variables everywhere in the simulation and interface.
+    JSON key: `variablesNames`, space separated string. Default: `"u v"`
 
 ### Parameters
 
@@ -67,14 +86,14 @@ The configuration of a slider (value, start, step, stop) can be updated by modif
 
 ### Boundary conditions
 
-Boundary conditions can be specified for any species in the simulation. The following boundary conditions are available:
+Boundary conditions can be specified for any variables in the simulation. The following boundary conditions are available:
 
 - Periodic
 - [Dirichlet](https://en.wikipedia.org/wiki/Dirichlet_boundary_condition) (e.g. $u|_{\partial\Omega} = 0$)
 - [Neumann](https://en.wikipedia.org/wiki/Neumann_boundary_condition) (e.g. $\frac{du}{dn}|_{\partial\Omega} = 0$)
 - [Robin](https://en.wikipedia.org/wiki/Robin_boundary_condition) (e.g. $(u + \frac{du}{dn})|_{\partial\Omega} = 0$)
 
-Boundary conditions that allow you to specify values can be functions of space ($x$, $y$), time ($t$), any of the unknowns ($u$, $v$, $w$, $q$), the size of the domain ($L$, $L_x$, $L_y$), the images ($I_S$, $I_T$) and any quantities defined in **Parameters**. Robin boundary conditions are the only type supported that allow you to use an unknown in the specification of its own boundary condition. See our discussion of [valid expressions](#writing-valid-expressions) for valid syntax and a list of available in-built functions.
+Boundary conditions that allow you to specify values can be functions of space ($x$, $y$), time ($t$), any of the active variables, the size of the domain ($L$, $L_x$, $L_y$), the images ($I_S$, $I_T$) and any quantities defined in **Parameters**. Robin boundary conditions are the only type supported that allow you to use an unknown in the specification of its own boundary condition. See our discussion of [valid expressions](#writing-valid-expressions) for valid syntax and a list of available in-built functions.
 
 An additional option, **Mixed...**, is also available, which allows you to specify different types of boundary condition on the Left, Right, Top and Bottom sides of rectangular domains.
 
@@ -84,7 +103,7 @@ The easiest way to do this is using the graphical interface by clicking 🧊 bes
 Left: Dirichlet = 0; Right: Neumann = 1; Top: Robin = u; Bottom: Dirichlet = sin(x)
 ```
 
-for the species $u$ would specify $u = 0$ on the left boundary, $\frac{du}{dn} = 1$ on the right boundary, $\frac{du}{dn} = u$ on the top boundary and $u = \sin(x)$ on the bottom boundary. Sides can be specified in any order and are case sensitive. Omitting any side will default to periodic boundary conditions (beware, this may have unexpected results if the matching side is not also periodic; using the graphical interface prevents this).
+for the variables $u$ would specify $u = 0$ on the left boundary, $\frac{du}{dn} = 1$ on the right boundary, $\frac{du}{dn} = u$ on the top boundary and $u = \sin(x)$ on the bottom boundary. Sides can be specified in any order and are case sensitive. Omitting any side will default to periodic boundary conditions (beware, this may have unexpected results if the matching side is not also periodic; using the graphical interface prevents this).
 
 An additional type of condition, 'Ghost', can also be specified with Mixed boundary conditions. This advanced option pushes VisualPDE to its limits, overriding the value of the [ghost nodes](https://kyleniemeyer.github.io/ME373-book/content/bvps/finite-difference.html#using-central-differences-for-derivative-bcs) used in the spatial discretisation of the PDE, and should be used with caution. We make use of this option in our Visual Story on [virus transmission](/visual-stories/airborne-infections) to effectively double the size of the computational domain in one direction. This must be toggled on in <span class='click_sequence'>Settings (🔧) → **Misc.**</span>
 JSON key: `boundaryConditions_i`, one of (`periodic`, `dirichlet`, `neumann`, `robin`). Defaults: `boundaryConditions_1`: `periodic`, `boundaryConditions_2`: `periodic`.
@@ -94,36 +113,21 @@ JSON key: `robinStr_i`, definition, string.
 
 ### Initial conditions
 
-Initial conditions can be specified for any species in the simulation. They can be functions of space ($x$, $y$), the size of the domain ($L$, $L_x$, $L_y$), the images ($I_S$, $I_T$), the random quantity `RAND`, a uniformly random value in $[0,1]$, the random quantity `RANDN`, a normally-distributed random number with unit variance and zero mean, and any quantities defined in **Parameters**. See our discussion of [valid expressions](#writing-valid-expressions) for valid syntax and a list of available in-built functions.
+Initial conditions can be specified for any variables in the simulation. They can be functions of space ($x$, $y$), the size of the domain ($L$, $L_x$, $L_y$), the images ($I_S$, $I_T$), the random quantity `RAND`, a uniformly random value in $[0,1]$, the random quantity `RANDN`, a normally-distributed random number with unit variance and zero mean, and any quantities defined in **Parameters**. See our discussion of [valid expressions](#writing-valid-expressions) for valid syntax and a list of available in-built functions.
 JSON key: `initCond_i`, definition, string. Defaults: `initCond_1`: `"0"`, `initCond_2`: `"1"`.
 
 ### Advanced options
 
-Configure additional equation-related settings, including the number of species and the type of terms that will be included.
-
-- #### \# species
-
-  Specify the number of unknowns (1, 2, 3, or 4) in the simulation.
-  JSON key: `numSpecies`, one of `1`, `2`, `3` or `4`. Default: `2`.
-
-- #### \# algebraic
-
-  Choose how many equations you want to be in algebraic form in systems with cross diffusion enabled. The equations will be put in algebraic form in reverse order, e.g. a 4-species system with 1 algebraic species will convert the final equation to be algebraic.
-  JSON key: `numAlgebraicSpecies`, one of `0`, `1`, `2`, or `3`. Default: `0`.
-
-- #### Species names
-
-  Specify custom names for the species in VisualPDE. When changing "# species" to a higher number previously set, new species will be named by default to `SPECIES2`, `SPECIES3` and `SPECIES4`, for 2, 3, 4 species, respectively. Names can be multi-character and can include letters, numbers, and underscores, but must each be a single 'word'. For example, `T_01` is a valid name (rendered as $T_{01}$) whilst `T 01` is not. Space or commas can be used to separate names in the list. Certain names are reserved under the hood, such as `H` for the Heaviside function, but VisualPDE will warn you if you attempt to use a reserved name. VisualPDE will automatically substitute the names of old species everywhere in the simulation and interface.
-  JSON key: `speciesNames`, space separated string. Default: `"u v"`
+Configure additional equation-related settings, including the type of terms that will be included.
 
 - #### Cross diffusion
 
-  Enable cross diffusion in systems with 2 or more species, enabling simulation of a wide range of systems in which a species can depend on the gradient of another.
+  Enable cross diffusion in systems with 2 or more variables, enabling simulation of a wide range of systems in which a variables can depend on the gradient of another.
   JSON key: `crossDiffusion`, boolean. Default: `false`.
 
 - #### Scales
 
-  Set per-equation timescales (multiplying any time derivatives) $\tau_u$, $\tau_v$, $\tau_w$, $\tau_q$ to enable simpler entry of some types of systems. For algebraic equations, these quantities are no longer timescales, but retain their notation and function as per-equation scale factors. They can be functions of space ($x$, $y$), time ($t$), any of the unknowns ($u$, $v$, $w$, $q$), their gradients ($u_x$, $u_y$, etc.), the size of the domain ($L$, $L_x$, $L_y$), the images ($I_S$, $I_T$), and any quantities defined in **Parameters**. See our discussion of [valid expressions](#writing-valid-expressions) for valid syntax and a list of available in-built functions.
+  Set per-equation timescales (multiplying any time derivatives) $\tau_u$, $\tau_v$, $\tau_w$, $\tau_q$ to enable simpler entry of some types of systems. For algebraic equations, these quantities are no longer timescales, but retain their notation and function as per-equation scale factors. They can be functions of space ($x$, $y$), time ($t$), any of the active variables, their gradients ($u_x$, $u_y$, etc.), the size of the domain ($L$, $L_x$, $L_y$), the images ($I_S$, $I_T$), and any quantities defined in **Parameters**. See our discussion of [valid expressions](#writing-valid-expressions) for valid syntax and a list of available in-built functions.
 
   Importantly, **timescales must be non-zero**. Setting timescales to zero will result in singularities and are equivalent to large diffusion coefficients, large timesteps, or fast kinetic terms.
   JSON key: `timescales`, enable scales, boolean. Default: `false`.
@@ -149,7 +153,7 @@ Delete the currently selected View. Only visible if there are at least two views
 
 ### Expression
 
-Choose the expression that you want to be used to colour the domain, which can be any function of the species solved for, as well as space, time, and user-defined parameters. Often, this is either $u$, $v$, $w$ or $q$. Explicitly, this can be a function of space ($x$, $y$), time ($t$), any of the unknowns ($u$, $v$, $w$, $q$) and their gradients ($u_x$, $u_y$, etc.), the size of the domain ($L$, $L_x$, $L_y$) and the images ($I_S$, $I_T$).
+Choose the expression that you want to be used to colour the domain, which can be any function of the variables solved for, as well as space, time, and user-defined parameters. Often, this is just a single variables. Explicitly, this can be a function of space ($x$, $y$), time ($t$), any of the active variables and their gradients ($u_x$, $u_y$, etc.), the size of the domain ($L$, $L_x$, $L_y$) and the images ($I_S$, $I_T$).
 JSON key: `whatToDraw`, `whatToPlot`, definition, string. Defaults: `whatToDraw`: `"u"`, `whatToPlot`: `"u"`.
 
 ### Plot type
@@ -269,7 +273,7 @@ JSON key: `overlay`, boolean.
 
 - #### Expression
 
-  Set an expression whose zero set defines a curve to be displayed in the domain. This can be a function of space ($x$, $y$), time ($t$), any of the unknowns ($u$, $v$, $w$, $q$), their gradients ($u_x$, $u_y$, etc.), the size of the domain ($L$, $L_x$, $L_y$), the images ($I_S$, $I_T$), and any quantities defined in **Parameters**. See our discussion of [valid expressions](#writing-valid-expressions) for valid syntax and a list of available in-built functions.
+  Set an expression whose zero set defines a curve to be displayed in the domain. This can be a function of space ($x$, $y$), time ($t$), any of the active variables, their gradients ($u_x$, $u_y$, etc.), the size of the domain ($L$, $L_x$, $L_y$), the images ($I_S$, $I_T$), and any quantities defined in **Parameters**. See our discussion of [valid expressions](#writing-valid-expressions) for valid syntax and a list of available in-built functions.
   JSON key: `overlayExpr`, definition, string.
 
 - #### Threshold
@@ -282,7 +286,7 @@ When viewing surface plots, this menu will appear to allow you to customise aspe
 
 - #### Custom surface
 
-  Toggle the rendering of the solution on a custom, user-defined surface. The surface $z(x,y)$ is specified in **Surface $z$**, which appears when a custom surface is enabled. This definition can be a function of space ($x$, $y$), time ($t$), any user-defined parameters, any of the unknowns ($u$, $v$, $w$, $q$) and their first derivatives, the size of the domain ($L$, $L_x$, $L_y$) and the images ($I_S$, $I_T$).
+  Toggle the rendering of the solution on a custom, user-defined surface. The surface $z(x,y)$ is specified in **Surface $z$**, which appears when a custom surface is enabled. This definition can be a function of space ($x$, $y$), time ($t$), any user-defined parameters, any of the active variables and their first derivatives, the size of the domain ($L$, $L_x$, $L_y$) and the images ($I_S$, $I_T$).
   JSON key: `customSurface`, boolean.
 
 - #### Height scale
@@ -323,7 +327,7 @@ JSON key: `vectorField`, boolean.
 
 - #### $x$, $y$ component
 
-  Specify the $x$ and $y$ components of the vector field. These components can be functions of space ($x$, $y$), time ($t$), any user-defined parameters, any of the unknowns ($u$, $v$, $w$, $q$) and their first derivatives, the size of the domain ($L$, $L_x$, $L_y$) and the images ($I_S$, $I_T$).
+  Specify the $x$ and $y$ components of the vector field. These components can be functions of space ($x$, $y$), time ($t$), any user-defined parameters, any of the active variables and their first derivatives, the size of the domain ($L$, $L_x$, $L_y$) and the images ($I_S$, $I_T$).
   JSON key: `arrowX`, definition, string.
   JSON key: `arrowY`, definition, string.
 
@@ -353,7 +357,7 @@ JSON key: `probing`, boolean.
 
 - #### Expression
 
-  Specify the expression to be sampled or integrated. This can be a function of space ($x$, $y$), time ($t$), any user-defined parameters, any of the unknowns ($u$, $v$, $w$, $q$) and their first derivatives, the size of the domain ($L$, $L_x$, $L_y$) and the images ($I_S$, $I_T$). Boundary conditions may not be accurately reflected in computed values.
+  Specify the expression to be sampled or integrated. This can be a function of space ($x$, $y$), time ($t$), any user-defined parameters, any of the active variables and their first derivatives, the size of the domain ($L$, $L_x$, $L_y$) and the images ($I_S$, $I_T$). Boundary conditions may not be accurately reflected in computed values.
   JSON key: `probeFun`, definition, string. Default: `"u"`.
 
 - #### $x$, $y$
@@ -384,22 +388,22 @@ VisualPDE allows you to interact directly with simulations via a brush by simply
 
 - #### Type
 
-  Change the shape of the brush, choosing between **Disk**, **Square**, **Horizontal line** and **Vertical line**. An additional option, **Custom**, allows you to define a custom shape in the **_Indicator_** field by typing in an expression. The brush will draw wherever the expression is positive. Expressions can be a function of space ($x$, $y$), the brush coordinates ($xB$, $yB$), time ($t$), any user-defined parameters, any of the unknowns ($u$, $v$, $w$, $q$), the size of the domain ($L$, $L_x$, $L_y$), and the images ($I_S$, $I_T$).
+  Change the shape of the brush, choosing between **Disk**, **Square**, **Horizontal line** and **Vertical line**. An additional option, **Custom**, allows you to define a custom shape in the **_Indicator_** field by typing in an expression. The brush will draw wherever the expression is positive. Expressions can be a function of space ($x$, $y$), the brush coordinates ($xB$, $yB$), time ($t$), any user-defined parameters, any of the active variables, the size of the domain ($L$, $L_x$, $L_y$), and the images ($I_S$, $I_T$).
   JSON key: `brushType`, one of (`circle`, `square`, `hline`, `vline`, `custom`).
 
 - #### Value
 
-  Change the **value** that you are painting. This can be a function of space ($x$, $y$), time ($t$), any user-defined parameters, any of the unknowns ($u$, $v$, $w$, $q$), the size of the domain ($L$, $L_x$, $L_y$), the images ($I_S$, $I_T$), `RAND`, a uniformly random value in $[0,1]$, and `RANDN`, a normally-distributed random number with unit variance and zero mean. Using the alternate mouse button (often the right mouse button) will negate the value of the brush (unavailable on touch devices).
+  Change the **value** that you are painting. This can be a function of space ($x$, $y$), time ($t$), any user-defined parameters, any of the active variables, the size of the domain ($L$, $L_x$, $L_y$), the images ($I_S$, $I_T$), `RAND`, a uniformly random value in $[0,1]$, and `RANDN`, a normally-distributed random number with unit variance and zero mean. Using the alternate mouse button (often the right mouse button) will negate the value of the brush (unavailable on touch devices).
   JSON key: `brushValue`, definition, string.
   JSON key: `brushAction`, one of (`replace`, `add`).
 
 - #### Radius
 
-  Change the brush size, measured on the same scale as the domain size. This can even be a function of space ($x$, $y$), time ($t$), any user-defined parameters, any of the unknowns ($u$, $v$, $w$, $q$), the size of the domain ($L$, $L_x$, $L_y$) and the images ($I_S$, $I_T$).
+  Change the brush size, measured on the same scale as the domain size. This can even be a function of space ($x$, $y$), time ($t$), any user-defined parameters, any of the active variables, the size of the domain ($L$, $L_x$, $L_y$) and the images ($I_S$, $I_T$).
   JSON key: `brushRadius`, definition, string.
 
-- #### Species
-  Set the **species** ($u$, $v$, $w$, $q$) you are painting.
+- #### Variables
+  Set the active variables you are painting.
 
 ### Domain
 
@@ -435,7 +439,7 @@ VisualPDE allows you to interact directly with simulations via a brush by simply
   JSON key: `domainViaIndicatorFun`, boolean.
 
 - #### Ind. fun (indicator function)
-  Define the domain implicitly by setting a boolean (e.g. $x<0.5$) or a simple expression (e.g. $x-0.5$), where (strict) positivity identifies the interior of the domain. This can be a function of space ($x$, $y$), time ($t$), any of the unknowns ($u$, $v$, $w$, $q$), the size of the domain ($L$, $L_x$, $L_y$) and the images ($I_S$, $I_T$). In order to allow VisualPDE to correctly apply boundary conditions, the edge of the computational domain is always counted as being outside of the custom domain.
+  Define the domain implicitly by setting a boolean (e.g. $x<0.5$) or a simple expression (e.g. $x-0.5$), where (strict) positivity identifies the interior of the domain. This can be a function of space ($x$, $y$), time ($t$), any of the active variables, the size of the domain ($L$, $L_x$, $L_y$) and the images ($I_S$, $I_T$). In order to allow VisualPDE to correctly apply boundary conditions, the edge of the computational domain is always counted as being outside of the custom domain.
   JSON key: `domainIndicatorFun`, definition, string.
 
 ### Timestepping
@@ -452,7 +456,7 @@ VisualPDE allows you to interact directly with simulations via a brush by simply
 
 - #### Scheme
 
-  Select one of various timestepping schemes. [Forward Euler](https://en.wikipedia.org/wiki/Euler_method) is the fastest but least accurate; the [Midpoint Method](https://en.wikipedia.org/wiki/Midpoint_method) and [Runge-Kutta 4](https://en.wikipedia.org/wiki/Runge–Kutta_methods) improve upon the accuracy and stability of Forward Euler, though are associated with increased computational cost. [Adams-Bashforth 2](https://en.wikipedia.org/wiki/Linear_multistep_method#Two-step_Adams–Bashforth) is more accurate but less stable than Forward Euler. Use of higher accuracy schemes may require a reduction of Steps/frame to reduce stuttering due to increased computational load. When solving stochastic partial differential equations, only Forward Euler is supported.
+  Select one of various timestepping schemes. [Forward Euler](https://en.wikipedia.org/wiki/Euler_method) is the fastest but least accurate; the [Midpoint Method](https://en.wikipedia.org/wiki/Midpoint_method) and [Runge-Kutta 4](https://en.wikipedia.org/wiki/Runge–Kutta_methods) improve upon the accuracy and stability of Forward Euler, though are associated with increased computational cost. [Adams-Bashforth 2](https://en.wikipedia.org/wiki/Linear_multistep_method#Two-step_Adams–Bashforth) is more accurate but less stable than Forward Euler. Use of higher accuracy schemes may require a reduction of Steps/frame to reduce stuttering due to increased computational load. When solving stochastic partial differential equations, only Forward Euler is supported. All schemes are available regardless of the number of variables (see **# variables**).
   JSON key: `timesteppingScheme`, one of (`Euler`, `Mid`, `RK4`, `AB2`). Default: `Euler`.
 
 - #### Elapsed time
@@ -549,6 +553,11 @@ VisualPDE supports checkpoints, which allow you to save the state of a simulatio
   The degree to which the blend image should be blended into the simulation view. 0 corresponds to no blending.
   JSON key: `blendImageAmount`, float.
 
+- #### Int. update
+
+  The number of timesteps between updates of any `Int(...)` quantities used in the simulation - see the "Special functions" section below. Lower numbers result in more frequent updates, but may slow down the simulation. Must be an integer greater than 0.
+  JSON key: `globalIntegralUpdatePeriod`, integer.
+
 - #### Dev
 
   Tools intended for the development and benchmarking of VisualPDE.
@@ -617,9 +626,11 @@ A [bump function](https://en.m.wikipedia.org/wiki/Bump_function) with compact su
 
 A [bivariate Gaussian function](https://en.wikipedia.org/wiki/Multivariate_normal_distribution) can be used with similar syntax to the bump function: `Gauss(X, Y, s)` is a correctly normalised Gaussian function centred at $(X,Y)$ with standard deviation `s`. The extended syntax `Gauss(X, Y, s_x, s_y)` produces a potentially asymmetric Gaussian with standard deviations `s_x` and `s_y` in the $x$ and $y$ directions, with zero correlation. Correlation can be specified via `Gauss(X, Y, s_x, s_y, r)`, where `r` is the correlation between the two directions.
 
+A quantity can be integrated over the domain at every timestep using the syntax `Int(expression)`, where `expression` follows the same rules as any other expression. As an example, you can track the total mass of a variable $u$ in a reaction term by writing `Int(u)` directly in that term. Up to 4 distinct `Int(...)` expressions can be used across a simulation - the same expression can be reused in as many fields as you like at no extra cost, while a 5th distinct expression raises an error. `Int(...)` expressions cannot be nested. The update rate is set by **Int. update** under **Misc** (JSON key: `globalIntegralUpdatePeriod`). There is no separate JSON key for the integrand expressions themselves - they live inline, wherever `Int(...)` is used. `Int(...)` works in View expressions (Probe, Overlay, Expression, Surface $z$, etc.) as well as reaction/forcing terms, but not in Initial conditions, since a domain integral isn't computed until the simulation is running - using `Int(...)` there raises an error.
+
 ### Non-local evaluation
 
-Sometimes, you might want direct access to the values of a species at points other than `(x,y)`, such as if you wanted to implement a higher order derivative or a lattice dynamical system. You can access a species (e.g. `u`) at an arbitrary position via the syntax `u[x,y]`, where `x` and `y` can be any valid expression that points to somewhere in the domain. For instance, writing `u[x+dx,y+dy] - u[x-dx,y-dy]` will lookup nearby values of `u`, offset by the step sizes `dx` and `dy`.
+Sometimes, you might want direct access to the values of a variables at points other than `(x,y)`, such as if you wanted to implement a higher order derivative or a lattice dynamical system. You can access a variables (e.g. `u`) at an arbitrary position via the syntax `u[x,y]`, where `x` and `y` can be any valid expression that points to somewhere in the domain. For instance, writing `u[x+dx,y+dy] - u[x-dx,y-dy]` will lookup nearby values of `u`, offset by the step sizes `dx` and `dy`.
 
 The behaviour of non-local evaluations using these expressions is undefined at boundaries (so that Neumann boundary conditions may not behave as expected, for instance), unless periodic boundary conditions are used.
 
@@ -644,21 +655,21 @@ The following parameters are only accessible via query strings.
 
 There are special characters that are reserved in query strings that often overlap with mathematical expressions, these are,
 
-- To denote space we use `+` or `%20`, commonly used to rename species, e.g. `speciesNames=u+v+w`.
+- To denote space we use `+` or `%20`, commonly used to rename variables, e.g. `variablesNames=u+v+w`.
 - Conversely, to denote a literal plus symbol `+`, we use `%2B`, common in expressions, e.g. `reactionStr_3=v*w+0.5*w`.
 - Similarly, `%2F` is used for `/`, commonly used as the division operator, e.g. `reactionStr_1=v*w/u`.
 - Lastly, `%26` is used for `&`, but this is not used in VisualPDE.
 
 ### Example
 
-The following gives a 3-species system:
+The following gives a 3-variables system:
 
-`https://visualpde.com/sim/?numSpecies=3&speciesNames=u+v+w&crossDiffusion=true&reactionStr_1=u*(1-u)-u*v&reactionStr_2=u*v-0.5*v-v*w&reactionStr_3=v*w-0.5*w&diffusionStr_1_1=0.1&diffusionStr_2_2=0.1&diffusionStr_3_3=0.1&diffusionStr_1_2=0.5&initCond_1=RAND&initCond_2=0.1&initCond_3=0.01&boundaryConditions_1=dirichlet&dirichletStr_1=0&boundaryConditions_2=neumann&neumannStr_2=0&boundaryConditions_3=periodic&dt=0.001&simTitle=3-species%20example`
+`https://visualpde.com/sim/?numVariables=3&variablesNames=u+v+w&crossDiffusion=true&reactionStr_1=u*(1-u)-u*v&reactionStr_2=u*v-0.5*v-v*w&reactionStr_3=v*w-0.5*w&diffusionStr_1_1=0.1&diffusionStr_2_2=0.1&diffusionStr_3_3=0.1&diffusionStr_1_2=0.5&initCond_1=RAND&initCond_2=0.1&initCond_3=0.01&boundaryConditions_1=dirichlet&dirichletStr_1=0&boundaryConditions_2=neumann&neumannStr_2=0&boundaryConditions_3=periodic&dt=0.001&simTitle=3-variables%20example`
 
 Explaination,
 
-- `numSpecies=3`: sets `# species` to 3.
-- `speciesNames=u+v+w`: sets species names to `u`, `v` and `w`. This is essential as these will be used in the expressions that follow.
+- `numVariables=3`: sets `# variables` to 3.
+- `variablesNames=u+v+w`: sets variables names to `u`, `v` and `w`. This is essential as these will be used in the expressions that follow.
 - `crossDiffsuin=true`: toggles cross diffusion.
 - `reactionStr_1=u*(1-u)-u*v`: sets `f_u = u*(1-u)-u*v`.
 - `reactionStr_2=u*v-0.5*v-v*w`: sets `f_v = u*v-0.5*v-v*w`.
@@ -676,6 +687,8 @@ Explaination,
 - `neumannStr_2=0`: sets `\frac{\partial v}{\partial n}|_{\partial\Omega}=0`.
 - `boundaryConditions_2=periodic`: sets `v` boundary condition to Periodic.
 - `dt=0.001`: sets the timestep size to `0.001`. The default timestep size of `0.1` is too large for this kind of simulation.
-- `simTitle=3-species%20example`: sets the simulation title to `3-species example`.
+- `simTitle=3-variables%20example`: sets the simulation title to `3-variables example`.
 
 All other options remain to default values as they are unmodified.
+
+VisualPDE supports up to 8 variables (`numVariables=1` through `numVariables=8`). Variables 5 through 8 have no natural single-letter name, so their default names are `u5`, `u6`, `u7` and `u8`, and the same `diffusionStr_i_j`/`reactionStr_i`/`boundaryConditions_i`/etc. naming convention extends directly, e.g. `diffusionStr_1_5` sets the cross-diffusion coefficient between variables 1 and variables 5, and `reactionStr_6` sets the reaction term for variables 6.

@@ -34,7 +34,7 @@ The following **boundary conditions** are available to allow you to set the valu
 You can swap between boundary conditions by choosing <span class='click_sequence'>Equations ($f(x)$) → **Boundary conditions**</span> and selecting from the list for each variable.
 
 ### Initial conditions
-You can specify the values to which the unknowns ($u$, $v$, $w$) are initialised when resetting the simulation. These expressions can be functions of $x$, $y$, the special string 'RAND' that assigns a random number in [0,1] to each point in the domain, along with any user-defined parameters and the images $I_S$ and $I_T$ (see the [advanced documentation](/user-guide/advanced-options) for more details). You can also use $L$, $L_x$ and $L_y$.
+You can specify the values to which the unknowns are initialised when resetting the simulation. These expressions can be functions of $x$, $y$, the special string 'RAND' that assigns a random number in [0,1] to each point in the domain, along with any user-defined parameters and the images $I_S$ and $I_T$ (see the [advanced documentation](/user-guide/advanced-options) for more details). You can also use $L$, $L_x$ and $L_y$.
 
 ### Changing the equations
 
@@ -44,7 +44,7 @@ $$\frac{du}{dt} = \nabla \cdot (D_u \nabla u) + f_u,$$
 
 where $D_u$ and $f_u$ are functions of $u$, $x$, $y$, and $t$ that you can specify.
 
-The most complicated type is a coupled system of PDEs in four unknowns, $u$, $v$, $w$ and $q$:
+VisualPDE supports systems of up to 8 coupled unknowns; the same pattern illustrated below for four unknowns, $u$, $v$, $w$ and $q$, extends directly to further variables (named $u5$ through $u8$ by default, since there's no natural fifth letter):
 
 $$\begin{aligned}
 t_u\frac{du}{dt} &= \nabla \cdot(D_{uu}\nabla u+D_{uv}\nabla v+D_{uw}\nabla w+D_{uq}\nabla q) + f_u,\\
@@ -67,9 +67,9 @@ t_u\frac{du}{dt} &= \nabla \cdot(D_{uu}\nabla u+D_{uv}\nabla v+D_{uw}\nabla w+D_
 
 where $D_{uu}, \dots,  D_{qq}$, $f_u, \dots, f_q$ and $t_u, \dots, t_q$ are functions of $u$, $v$, $w$, $q$, $x$, $y$ and $t$ that you can specify.
 
-* You can change the number of unknowns by choosing <span class='click_sequence'>Equations ($f(x)$) → **Advanced options** → **\# species**</span>
+* You can change the number of unknowns (from 1 to 8) by choosing <span class='click_sequence'>Equations ($f(x)$) → **Advanced options** → **\# variables**</span>
 * In systems of multiple unknowns, you can include terms representing cross-diffusion (e.g. $D_{uv}$, $D_{vu}$) by toggling <span class='click_sequence'>Equations ($f(x)$) → **Advanced options** → **Cross diffusion**</span>
-* In systems of multiple unknowns, you can choose between a differential or algebraic equation for some of the species (e.g. '$\partial w/\partial t=$' or '$w=$') by toggling <span class='click_sequence'>Equations ($f(x)$) → **Advanced options** → **Algebraic w** (or **v** or **q**)</span>
+* In systems of multiple unknowns, you can choose between a differential or algebraic equation for some of the variables (e.g. '$\partial w/\partial t=$' or '$w=$') by setting <span class='click_sequence'>Equations ($f(x)$) → **Advanced options** → **\# algebraic**</span>. variables are converted to algebraic form in reverse order, e.g. setting this to 1 converts only the last variables to algebraic form.
 
 ### More VisualPDE
 For a comprehensive list of all the options that you can set in VisualPDE, check out the [Advanced documentation](/user-guide/advanced-options), or discover what VisualPDE can solve in our brief [summary](/user-guide/what-can-visualpde-solve).

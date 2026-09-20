@@ -1,0 +1,24 @@
+---
+layout: default
+title: Blog
+---
+<h1 class="post-title">Latest news from VisualPDE</h1>
+
+{% if site.posts.size > 0 %}
+  <div class="post-list">
+  {% for post in site.posts %}
+    <article class="post-preview">
+      <h2><a href="{{ post.url }}">{{ post.title }}</a></h2>
+      <p class="post-meta">
+        <time datetime="{{ post.date | date_to_xmlschema }}">{{ post.date | date: "%d %B %Y" }}</time> · by {{ post.author | default: "VisualPDE" }}
+      </p>
+      <div class="post-excerpt">
+        {{ post.excerpt }}
+      </div>
+      <p><a href="{{ post.url }}" aria-label="Read more: {{ post.title }}">Read more</a></p>
+    </article>
+  {% endfor %}
+  </div>
+{% else %}
+  <p>No news posts have been published yet.</p>
+{% endif %}

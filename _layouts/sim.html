@@ -1,650 +1,627 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <link rel="manifest" href="/manifest.json" />
-    <title>Simulation | VisualPDE</title>
-    <meta charset="utf-8" />
-    <meta http-equiv="Cache-control" content="public" />
-    <meta
-      name="viewport"
-      content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0"
-    />
-    <meta
-      name="theme-color"
-      media="(prefers-color-scheme: dark)"
-      content="#202124"
-    />
-    <meta name="twitter:card" content="summary" />
-    <meta name="twitter:site:id" content="@visualpde" />
-    <meta name="twitter:title" content="Interactive simulation | VisualPDE" />
-    <meta
-      name="twitter:description"
-      content="An interactive simulation of a partial differential equation, live in your browser with VisualPDE."
-    />
-    <meta
-      name="twitter:image"
-      content="https://visualpde.com/assets/favicons/twitter-icon.webp"
-    />
-    <meta
-      name="description"
-      content="An interactive simulation of a partial differential equation, live in your browser with VisualPDE."
-    />
-    <meta property="og:type" content="website" />
-    <meta property="og:title" content="Interactive simulation | VisualPDE" />
-    <meta
-      property="og:description"
-      content="An interactive simulation of a partial differential equation, live in your browser with VisualPDE."
-    />
-    <meta
-      property="og:image"
-      content="https://visualpde.com/assets/favicons/android-chrome-1200x630.webp"
-    />
-    <meta property="og:url" content="https://visualpde.com" />
-    <meta property="og:site_name" content="VisualPDE" />
-    <link rel="stylesheet" href="{{ "/assets/main.css" | relative_url }}">
-    <link type="text/css" rel="stylesheet" href="/assets/css/shepherd.css" />
-    <link type="text/css" rel="stylesheet" href="/assets/css/custom.css" />
-    <link type="text/css" rel="stylesheet" href="/sim/css/main.css" />
-    <script type="text/javascript">
-      var badLink = false;
-      var simURL = window.location.href;
-      var expandingOptionsInProgress = false;
-      var linkParsed = false;
-      let searchParams = new URLSearchParams(window.location.search);
-      if (searchParams.has("mini")) {
-        // Define a handler for the full link.
-        function handleMiniOpts(long, store) {
-          if (store) {
-            // Add to browser storage for quick lookup next time.
-            let short = searchParams.get("mini");
-            localStorage.setItem("short:" + short, long);
-            localStorage.setItem("long:" + long, short);
-          }
-          // Get the current URL, remove the 'mini' from the query string, and append the full options.
-          let currentURL = new URL(window.location.href);
-          currentURL.searchParams.delete("mini");
-          currentURL.searchParams.set("options", long);
-          // Set a variable to record the new URL, which may not be reflected in window.location.href until the page is reloaded.
-          simURL = currentURL.toString();
-          window.history.pushState(null, "", simURL);
-          // Record that the link has been parsed.
-          linkParsed = true;
+
+<head>
+  <link rel="manifest" href="/manifest.json" />
+  <title>Simulation | VisualPDE</title>
+  <meta charset="utf-8" />
+  <meta http-equiv="Cache-control" content="public" />
+  <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#202124" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:site:id" content="@visualpde" />
+  <meta name="twitter:title" content="Interactive simulation | VisualPDE" />
+  <meta name="twitter:description"
+    content="An interactive simulation of a partial differential equation, live in your browser with VisualPDE." />
+  <meta name="twitter:image" content="https://visualpde.com/assets/favicons/twitter-icon.webp" />
+  <meta name="description"
+    content="An interactive simulation of a partial differential equation, live in your browser with VisualPDE." />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Interactive simulation | VisualPDE" />
+  <meta property="og:description"
+    content="An interactive simulation of a partial differential equation, live in your browser with VisualPDE." />
+  <meta property="og:image" content="https://visualpde.com/assets/favicons/android-chrome-1200x630.webp" />
+  <meta property="og:url" content="https://visualpde.com" />
+  <meta property="og:site_name" content="VisualPDE" />
+  <link rel="stylesheet" href="{{ "/assets/main.css" | relative_url }}">
+  <link type="text/css" rel="stylesheet" href="/assets/css/shepherd.css" />
+  <link type="text/css" rel="stylesheet" href="/assets/css/custom.css" />
+  <link type="text/css" rel="stylesheet" href="/sim/css/main.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap" rel="stylesheet">
+  <script type="text/javascript">
+    var badLink = false;
+    var simURL = window.location.href;
+    var expandingOptionsInProgress = false;
+    var linkParsed = false;
+    let searchParams = new URLSearchParams(window.location.search);
+    if (searchParams.has("mini")) {
+      // Define a handler for the full link.
+      function handleMiniOpts(long, store) {
+        if (store) {
+          // Add to browser storage for quick lookup next time.
+          let short = searchParams.get("mini");
+          localStorage.setItem("short:" + short, long);
+          localStorage.setItem("long:" + long, short);
         }
-        // Check localStorage for the full link.
-        let fullOpts = localStorage.getItem(
-          "short:" + searchParams.get("mini"),
-        );
-        if (fullOpts) {
-          handleMiniOpts(fullOpts, false);
-        } else {
-          // If we didn't find it, start the lookup via the endpoints (local and AWS).
-          expandingOptionsInProgress = true;
-        }
+        // Get the current URL, remove the 'mini' from the query string, and append the full options.
+        let currentURL = new URL(window.location.href);
+        currentURL.searchParams.delete("mini");
+        currentURL.searchParams.set("options", long);
+        // Set a variable to record the new URL, which may not be reflected in window.location.href until the page is reloaded.
+        simURL = currentURL.toString();
+        window.history.pushState(null, "", simURL);
+        // Record that the link has been parsed.
+        linkParsed = true;
       }
-    </script>
-    <script async type="text/javascript">
-      // If the search string specifies a minified link, query the endpoint for the full link.
-      if (searchParams.has("mini")) {
-        if (!linkParsed) {
-          // Try the local static endpoint.
-          fetch(
-            window.location.origin + "/m/" + searchParams.get("mini") + ".txt",
-          )
-            .then((response) => {
-              if (response.ok) {
-                return response.text();
+      // Check localStorage for the full link.
+      let fullOpts = localStorage.getItem(
+        "short:" + searchParams.get("mini"),
+      );
+      if (fullOpts) {
+        handleMiniOpts(fullOpts, false);
+      } else {
+        // If we didn't find it, start the lookup via the endpoints (local and AWS).
+        expandingOptionsInProgress = true;
+      }
+    }
+  </script>
+  <script async type="text/javascript">
+    // If the search string specifies a minified link, query the endpoint for the full link.
+    if (searchParams.has("mini")) {
+      if (!linkParsed) {
+        // Try the local static endpoint.
+        fetch(
+          window.location.origin + "/m/" + searchParams.get("mini") + ".txt",
+        )
+          .then((response) => {
+            if (response.ok) {
+              return response.text();
+            }
+            throw new Error("No response to fetch");
+          })
+          .then((data) => {
+            if (data)
+              if (typeof data === "string") {
+                handleMiniOpts(data, true);
               }
-              throw new Error("No response to fetch");
+          })
+          .catch(() => {
+            // Fetch the full link from the endpoint.
+            const endpoint =
+              "https://link-shortener.8dsf27772t.workers.dev?shortKey=";
+            fetch(endpoint + searchParams.get("mini"), {
+              signal: AbortSignal.timeout(5000),
             })
-            .then((data) => {
-              if (data)
-                if (typeof data === "string") {
-                  handleMiniOpts(data, true);
+              .then((response) => {
+                if (response.ok) {
+                  return response.json();
                 }
-            })
-            .catch(() => {
-              // Fetch the full link from the endpoint.
-              const endpoint =
-                "https://link-shortener.8dsf27772t.workers.dev?shortKey=";
-              fetch(endpoint + searchParams.get("mini"), {
-                signal: AbortSignal.timeout(5000),
+                if (response.status === 404) {
+                  // The link is bad.
+                  badLink = true;
+                  linkParsed = true;
+                }
               })
-                .then((response) => {
-                  if (response.ok) {
-                    return response.json();
-                  }
-                  if (response.status === 404) {
-                    // The link is bad.
+              .then((data) => {
+                if (data) {
+                  const url = data["originalURL"];
+                  if (typeof url === "string") {
+                    handleMiniOpts(url, true);
+                  } else {
+                    // We've tried everything. The link is bad.
                     badLink = true;
                     linkParsed = true;
                   }
-                })
-                .then((data) => {
-                  if (data) {
-                    const url = data["originalURL"];
-                    if (typeof url === "string") {
-                      handleMiniOpts(url, true);
-                    } else {
-                      // We've tried everything. The link is bad.
-                      badLink = true;
-                      linkParsed = true;
-                    }
-                  }
-                })
-                .catch(() => {
-                  badLink = true;
-                  linkParsed = true;
-                });
-            });
-        }
+                }
+              })
+              .catch(() => {
+                badLink = true;
+                linkParsed = true;
+              });
+          });
       }
-    </script>
-    <script src="/assets/js/jQuery.js"></script>
-    <script defer src="/assets/js/qrcode.min.js"></script>
-    <script src="/assets/js/dark_mode.js"></script>
-    <script
-      defer
-      type="text/javascript"
-      src="/sim/scripts/dat.gui.min.js"
-    ></script>
+    }
+  </script>
+  <script src="/assets/js/jQuery.js"></script>
+  <script defer src="/assets/js/qrcode.min.js"></script>
+  <script src="/assets/js/dark_mode.js"></script>
+  <script defer type="text/javascript" src="/sim/scripts/dat.gui.min.js"></script>
 
-    <script type="text/javascript">
-      window.MathJax = {
-        loader: {
-          load: ["ui/menu", "[tex]/ams"],
+  <script type="text/javascript">
+    window.MathJax = {
+      loader: {
+        load: ["ui/menu", "[tex]/ams"],
+      },
+    };
+    window.MathJax = {
+      tex: {
+        macros: {
+          pd: ["\\frac{\\partial #1}{\\partial #2}", 2],
+          pdd: ["\\frac{\\partial^2 #1}{\\partial #2^2}", 2],
+          pdn: ["\\frac{\\partial^{#3} #1}{\\partial #2^{#3}}", 3],
+          vnabla: "\\boldsymbol{\\nabla}",
+          lap: "\\nabla^2",
+          m: ["{\\large\\symbfsfit{#1}}", 1],
+          v: ["\\boldsymbol{#1}", 1],
+          d: "\\mathrm{d}",
+          i: "\\mathrm{i}",
+          dx: "\\mathrm{dx}",
+          dy: "\\mathrm{dy}",
+          dt: "\\mathrm{dt}",
+          domain: "\\mathit{\\Omega}",
+          boundary: "\\partial\\mathit{\\Omega}",
+          onboundary: "\\vert_{\\boundary}",
+          selectedLight: ["{\\bbox[GreenYellow]{#1}}", 1],
+          selectedDark: ["{\\bbox[Purple]{#1}}", 1],
+          floor: ["\\left\\lfloor#1\\right\\rfloor", 1],
+          ind: ["\\mathbb{1}_{#1}", 1],
+          dmat: ["\\begin{bmatrix}#1&0\\\\0&#2\\end{bmatrix}", 2],
+          diff: ["\\frac{\\d #1}{\\d #2}", 2],
+          abs: ["\\left\\lvert#1\\right\\rvert", 1],
         },
-      };
-      window.MathJax = {
-        tex: {
-          macros: {
-            pd: ["\\frac{\\partial #1}{\\partial #2}", 2],
-            pdd: ["\\frac{\\partial^2 #1}{\\partial #2^2}", 2],
-            pdn: ["\\frac{\\partial^{#3} #1}{\\partial #2^{#3}}", 3],
-            vnabla: "\\boldsymbol{\\nabla}",
-            lap: "\\nabla^2",
-            m: ["{\\large\\symbfsfit{#1}}", 1],
-            v: ["\\boldsymbol{#1}", 1],
-            d: "\\mathrm{d}",
-            i: "\\mathrm{i}",
-            dx: "\\mathrm{dx}",
-            dy: "\\mathrm{dy}",
-            dt: "\\mathrm{dt}",
-            domain: "\\mathit{\\Omega}",
-            boundary: "\\partial\\mathit{\\Omega}",
-            onboundary: "\\vert_{\\boundary}",
-            selectedLight: ["{\\bbox[GreenYellow]{#1}}", 1],
-            selectedDark: ["{\\bbox[Purple]{#1}}", 1],
-            floor: ["\\left\\lfloor#1\\right\\rfloor", 1],
-            ind: ["\\mathbb{1}_{#1}", 1],
-            dmat: ["\\begin{bmatrix}#1&0\\\\0&#2\\end{bmatrix}", 2],
-            diff: ["\\frac{\\d #1}{\\d #2}", 2],
-            abs: ["\\left\\lvert#1\\right\\rvert", 1],
-          },
-          inlineMath: [
-            ["$", "$"],
-            ["\\(", "\\)"],
-          ],
-        },
-        options: {
-          menuOptions: {
-            settings: {
-              inTabOrder: false,
-            },
+        inlineMath: [
+          ["$", "$"],
+          ["\\(", "\\)"],
+        ],
+      },
+      options: {
+        menuOptions: {
+          settings: {
+            inTabOrder: false,
           },
         },
-      };
-    </script>
-    {%- if jekyll.environment == 'production' and site.google_analytics -%} {%-
-    include google-analytics.html -%} {%- endif -%}
-    <!-- Prevent loading of accessory scripts if the query string contains lite -->
-    <script type="text/javascript">
-      let params = new URLSearchParams(window.location.search);
-      if (!params.has("lite")) {
-        if (!params.has("nomathjax")) {
-          document.write(
-            '<script id="MathJax-script" async src="/assets/js/mathjax/es5/tex-chtml-full.js"><\/script>',
-          );
-        }
+      },
+    };
+  </script>
+  {%- if jekyll.environment == 'production' and site.google_analytics -%} {%-
+  include google-analytics.html -%} {%- endif -%}
+  <!-- Prevent loading of accessory scripts if the query string contains lite -->
+  <script type="text/javascript">
+    let params = new URLSearchParams(window.location.search);
+    if (!params.has("lite")) {
+      if (!params.has("nomathjax")) {
         document.write(
-          '<script defer src="/assets/fontawesome/solid.js"><\/script>',
-        );
-        document.write(
-          '<script defer src="/assets/fontawesome/fontawesome.min.js"><\/script>',
-        );
-        document.write(
-          '<link href="/assets/fontawesome/css/fontawesome.min.css" rel="stylesheet">',
-        );
-        document.write(
-          '<link href="/assets/fontawesome/css/solid.min.css" rel="stylesheet">',
-        );
-        document.write(
-          '<script type="module" src="/assets/js/shepherd.min.js"><\/script>',
+          '<script id="MathJax-script" async src="/assets/js/mathjax/es5/tex-chtml-full.js"><\/script>',
         );
       }
-    </script>
-    <script src="/sim/scripts/charts.umd.min.js"></script>
-    <script type="module" src="/sim/scripts/dat_gui_mods.js"></script>
-    <script type="module" src="/sim/scripts/RD/main.js"></script>
-    <script src="/sim/scripts/fitty.min.js"></script>
-    <script src="/sim/scripts/expr-eval.js"></script>
+      document.write(
+        '<script defer src="/assets/fontawesome/solid.js"><\/script>',
+      );
+      document.write(
+        '<script defer src="/assets/fontawesome/fontawesome.min.js"><\/script>',
+      );
+      document.write(
+        '<link href="/assets/fontawesome/css/fontawesome.min.css" rel="stylesheet">',
+      );
+      document.write(
+        '<link href="/assets/fontawesome/css/solid.min.css" rel="stylesheet">',
+      );
+      document.write(
+        '<script type="module" src="/assets/js/shepherd.min.js"><\/script>',
+      );
+    }
+  </script>
+  <script src="/sim/scripts/charts.umd.min.js"></script>
+  <script type="module" src="/sim/scripts/dat_gui_mods.js"></script>
+  <script type="module" src="/sim/scripts/RD/main.js"></script>
+  <script src="/sim/scripts/fitty.min.js"></script>
+  <script src="/sim/scripts/expr-eval.js"></script>
 
-    <link
-      rel="apple-touch-icon"
-      sizes="180x180"
-      href="/assets/favicons/apple-touch-icon.webp"
-    />
-    <link
-      rel="icon"
-      type="image/png"
-      sizes="32x32"
-      href="/assets/favicons/favicon-32x32.webp"
-    />
-    <link
-      rel="icon"
-      type="image/png"
-      sizes="16x16"
-      href="/assets/favicons/favicon-16x16.webp"
-    />
-    <link rel="manifest" href="/assets/favicons/site.webmanifest" />
-    <link
-      rel="mask-icon"
-      href="/assets/favicons/safari-pinned-tab.svg"
-      color="#5bbad5"
-    />
-    <link rel="shortcut icon" href="/assets/favicons/favicon.ico" />
-    <meta name="msapplication-TileColor" content="#da532c" />
-    <meta
-      name="msapplication-config"
-      content="/assets/favicons/browserconfig.xml"
-    />
-    <meta name="theme-color" content="#ffffff" />
-  </head>
+  <link rel="apple-touch-icon" sizes="180x180" href="/assets/favicons/apple-touch-icon.webp" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicons/favicon-32x32.webp" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicons/favicon-16x16.webp" />
+  <link rel="manifest" href="/assets/favicons/site.webmanifest" />
+  <link rel="mask-icon" href="/assets/favicons/safari-pinned-tab.svg" color="#5bbad5" />
+  <link rel="shortcut icon" href="/assets/favicons/favicon.ico" />
+  <meta name="msapplication-TileColor" content="#da532c" />
+  <meta name="msapplication-config" content="/assets/favicons/browserconfig.xml" />
+  <meta name="theme-color" content="#ffffff" />
+</head>
 
-  <body>
-    {%- include sim-header.html -%}
-  </body>
+<body>
+  {%- include sim-header.html -%}
+</body>
 
-  <div id="simulation">
-    <!-- The canvas for drawing on -->
-    <canvas id="simCanvas"></canvas>
+<div id="simulation">
+  <!-- The canvas for drawing on -->
+  <canvas id="simCanvas"></canvas>
 
+  <!-- Welcome message -->
     <div class="message big-popup" id="welcome">
-      <p>
-        <img src="/assets/images/2heart-light.webp" height="48" />
-      </p>
-      <p>Welcome to VisualPDE!</p>
+      <div class='centre_symbol'>
+        <img src="/assets/images/logo-light.webp" height="48" />
+      </div>
+      <p class="header">Welcome to VisualPDE!</p>
       <div id="tour_question">
-        <p>There is so much to explore. Would you like a tour?</p>
-        <br />
+        <p>There is so much to explore.<br />Would you like a tour?</p>
+        <p>
         <button id="welcome_ok" class="btn-primary message_ok highlight">
-          Yes, show me round!
+          Yes, show me around!
         </button>
         <br />
-        <button id="welcome_no" class="btn-primary message_ok">No, let me jump in!</button>
-      </div>
-      <p>
+        <button id="welcome_no" class="btn-primary message_ok">Skip the tour</button>
+      </p>
+    </div>
+    <div id="secondary_notices">
+      <p class="warning">
         Some simulations on VisualPDE.com may contain flashing images and
         patterns.
       </p>
-      <p style="font-size: 0.5em">
-        We use analytics cookies to evidence VisualPDE's impact to funders. By
+      <p class="cookies">
+        We use analytics cookies to evidence VisualPDEʼs impact to funders. By
         using this site, you consent to the use of cookies.
       </p>
-      <div id="lets_go_cont" style="display: none">
-        <button id="lets_go" class="btn-primary message_ok highlight">
-          OK, let's go!
-        </button>
-      </div>
     </div>
+    <div id="lets_go_cont" style="display: none">
+      <button id="lets_go" class="btn-primary message_ok highlight">
+        OK, let’s go!
+      </button>
+    </div>
+  </div>
 
-    <div
-      class="ui hidden ui_button"
-      id="equations"
-      title="Edit equations"
-    ></div>
-    <div id="left_ui" class="ui hidden">
-      <div id="equation_display">
-        <div id="equation_display_box">
-          <div id="typeset_equation"></div>
-        </div>
-      </div>
-      <div class="dg ac" id="leftGUIContainer" style="position: relative"></div>
-      <div id="left_ui_arrow" class="ui"></div>
+  <!-- Error message: Hit NaN -->
+  <div class="message big-popup" id="oops_hit_nan">
+    <div class="centre_symbol">
+      <i class="fa-solid fa-infinity"></i>
     </div>
-    <div
-      tabindex="-1"
-      class="ui hidden ui_button"
-      id="play_pause_placeholder"
-    ></div>
-    <div class="ui hidden ui_button" id="play" title="Play (space)">
-      <i class="fa-solid fa-play"></i>
-    </div>
-    <div class="ui hidden ui_button" id="pause" title="Pause (space)">
-      <i class="fa-solid fa-pause"></i>
-    </div>
-    <div class="ui hidden ui_button" id="erase" title="Restart (R)">
-      <i class="fa-solid fa-arrow-rotate-left"></i>
-    </div>
-    <div class="ui hidden ui_button" id="views" title="Views">
-      <i class="fa-solid fa-layer-group"></i>
-    </div>
-    <div id="views_ui" class="ui hidden">
-      <div
-        class="dg ac"
-        id="viewsGUIContainer"
-        style="position: relative"
-      ></div>
-      <div id="views_ui_arrow"></div>
-    </div>
-    <div class="ui hidden ui_button" id="settings" title="Settings">
-      <i class="fa-solid fa-wrench"></i>
-    </div>
-    <div id="right_ui" class="ui hidden">
-      <div
-        class="dg ac"
-        id="rightGUIContainer"
-        style="position: relative"
-      ></div>
-      <div id="right_ui_arrow"></div>
-    </div>
-    <div class="ui hidden ui_button" id="help" title="Help">
-      <i class="fa-solid fa-circle-question"></i>
-    </div>
-    <div class="ui hidden ui_button" id="share" title="Share">
-      <i class="fa-solid fa-share-from-square"></i>
-    </div>
-    <div class="ui hidden ui_button" id="llm-bot" title="LLM support">
-      <i class="fa-solid fa-robot"></i>
-    </div>
+    <p class="error_para">
+      <strong>Oops!</strong> It looks like things have spiralled off to
+      infinity, or the numerical solver is unstable.
+    </p>
+    <p class="error_para">
+      Check the equations, or try reducing the timestep, and restart the
+      simulation.
+    </p>
+    <button class="btn-primary message_dismiss" id="oops_hit_nan_close">
+      <i class="fa-solid fa-xmark icon_on_text_button"></i>Close
+    </button>
+  </div>
 
-    <div class="message small" id="link_copied"><p>Copied to clipboard</p></div>
-    <div class="message small" id="get_help"><p>Get help here anytime</p></div>
-    <div class="message small" id="llm-bot-message"><p>Try out LLM support</p></div>
-    <div class="message small mid" id="brush_disabled">
-      <p>Brush disabled</p>
+  <!-- Error message: General error -->
+  <div class="message big-popup" id="error">
+    <div class="centre_symbol">
+      <i class="fa-solid fa-clipboard-question"></i>
     </div>
-    <div class="message small mid" id="recording">
-      <div class="circle"></div>
-      <p>Recording <span id="recording_time"></span></p>
-      <div class="ui_button" id="stop_recording" title="Stop recording">
-        <i class="fa-solid fa-video-slash"></i>
-      </div>
-    </div>
-    <div class="message small" id="use_Chrome">
-      <p>Chrome/Firefox on desktop are recommended for video recording</p>
-    </div>
+    <p class="header">VisualPDE is throwing an error</p>
+    <p class="error_para" id="error_description"></p>
+    <p class="error_para">
+      Check for
+      <a href="/user-guide/advanced-options#writing-valid-expressions" target="_blank">syntax errors</a>, and
+      reload the page if the interface is unresponsive.
+    </p>
+    <button class="btn-primary message_ok highlight" id="error_fix_button">
+      <i class="fa-solid fa-plus icon_on_text_button"></i><span id="error_fix_button_text"></span>
+    </button>
+    <button class="btn-primary message_dismiss" id="error_close_button">
+      <i class="fa-solid fa-xmark icon_on_text_button"></i>Close
+    </button>
+  </div>
 
-    <a
-      id="logo"
-      title="To VisualPDE.com"
-      class="ui hidden"
-      href="/"
-      target="_blank"
-      >VisualPDE</a
-    >
+  <!-- Error message: Invalid preset -->
+  <div class="message big-popup" id="bad_preset">
+    <div class="centre_symbol">
+      <i class="fa-solid fa-clipboard-question"></i>
+    </div>
+    <p class="header">Unknown preset</p>
+    <p class="error_para" id="preset_description"></p>
+    <button class="btn-primary message_dismiss" id="preset_error_close_button">
+      <i class="fa-solid fa-xmark icon_on_text_button"></i>Close
+    </button>
+  </div>
 
-    <div class="message" id="top_message" title="Try clicking!">
-      <p>Try clicking!</p>
-    </div>
-    <div class="message big-popup" id="oops_hit_nan">
-      <div class="centre_symbol">
-        <i class="fa-sharp fa-solid fa-infinity"></i>
-      </div>
-      <p class="error_para">
-        <strong>Oops!</strong> It looks like things have spiralled off to
-        infinity, or the numerical solver is unstable.
-      </p>
-      <p class="error_para">
-        Check the equations, or try reducing the timestep, and restart the
-        simulation.
-      </p>
-      <button class="btn-primary message_dismiss" id="oops_hit_nan_close">
-        <i class="fa-solid fa-xmark icon_on_text_button"></i>Close
-      </button>
-    </div>
-    <div class="message big-popup" id="error">
-      <div class="centre_symbol">
-        <i class="fa-solid fa-clipboard-question"></i>
-      </div>
-      <p class="error_para">VisualPDE is throwing an error.</p>
-      <p class="error_para" id="error_description"></p>
-      <p class="error_para">
-        Check for
-        <a
-          href="/user-guide/advanced-options.html#writing-valid-expressions"
-          target="_blank"
-          >syntax errors</a
-        >, and reload the page if the interface is unresponsive.
-      </p>
-      <button class="btn-primary message_ok highlight" id="error_fix_button">
-        <i class="fa-solid fa-plus icon_on_text_button"></i
-        ><span id="error_fix_button_text"></span>
-      </button>
-      <button class="btn-primary message_dismiss" id="error_close_button">
-        <i class="fa-solid fa-xmark icon_on_text_button"></i>Close
-      </button>
-    </div>
-    <div class="message big-popup" id="bad_preset">
-      <div class="centre_symbol">
-        <i class="fa-solid fa-clipboard-question"></i>
-      </div>
-      <p class="error_para"><strong>Hmmm...</strong></p>
-      <p class="error_para" id="preset_description"></p>
-      <button
-        class="btn-primary message_dismiss"
-        id="preset_error_close_button"
-      >
-        <i class="fa-solid fa-xmark icon_on_text_button"></i>Close
-      </button>
-    </div>
-    <div class="message big-popup" id="first_video">
-      <div class="centre_symbol"><i class="fa-solid fa-file-video"></i></div>
-      <p>
-        Congratulations! You've recorded your first video clip with VisualPDE!
-      </p>
-      <br />
-      <p>
-        If you're planning to share it on social media or messaging apps, check
-        out our
-        <a href="/user-guide/FAQ.html#videoHelp" target="_blank"
-          >FAQ on video compatibility</a
-        >.
-      </p>
-      <button class="btn-primary message_dismiss" id="first_video_close">
-        <i class="fa-solid fa-xmark icon_on_text_button"></i>Close
-      </button>
-    </div>
-    <div class="message big-popup" id="webcam_access">
-      <div class="centre_symbol"><i class="fa-solid fa-file-video"></i></div>
-      <p>
-        This simulation is requesting access to your camera to put you in a
-        simulation.
-      </p>
-      <br />
-      <p>
-        Your data never leaves your device. Press OK to proceed, or navigate
-        away from this page.
-      </p>
-      <button class="btn-primary message_dismiss" id="webcam_ok">OK</button>
-    </div>
-    <div class="message big-popup" id="llm-message">
-      <div class="centre_symbol"><i class="fa-solid fa-robot"></i></div>
-      <p>
-        You've clicked the LLM support button! This is an experimental feature
-        that will connect you to a large language model for help with your
-        simulation.
-      </p>
+  <!-- Video clip message -->
+  <div class="message big-popup" id="first_video">
+    <div class="centre_symbol"><i class="fa-solid fa-file-video"></i></div>
+    <p class="header">First video downloaded!</p>
+    <p>
+      Congratulations! You've recorded your first video clip with VisualPDE.
+    </p>
+    <p>
+      If you're planning to share it on social media or messaging apps, check
+      out our
+      <a href="/user-guide/FAQ#videoHelp" target="_blank">FAQ on video compatibility</a>.
+    </p>
+    <p>
+    <button class="btn-primary message_dismiss" id="first_video_close">
+      <i class="fa-solid fa-xmark icon_on_text_button"></i>Close
+    </button>
+    </p>
+  </div>
+
+  <!-- Webcam access message -->
+  <div class="message big-popup" id="webcam_access">
+    <div class="centre_symbol"><i class="fa-solid fa-file-video"></i></div>
+    <p>
+      This simulation is requesting access to your camera to put you in a
+      simulation.
+    </p>
+    <br />
+    <p>
+      Your data never leaves your device. Press OK to proceed, or navigate
+      away from this page.
+    </p>
+    <button class="btn-primary message_dismiss" id="webcam_ok">OK</button>
+  </div>
+
+  <!-- LLM message -->
+  <div class="message big-popup" id="llm-message">
+    <div class="centre_symbol"><i class="fa-solid fa-robot"></i></div>
+    <p class="header">LLM support</p>
+    <p>
+      This is an experimental feature
+      that will connect you to Google Gemini for help with your
+      simulation.
+    </p>
+    <p>
       <button class="btn-primary message_ok highlight" id="llm_click_open">Open LLM
-        <svg style="color:" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-          <path fill="currentColor" d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3z"></path>
-          <path fill="currentColor" d="M5 5h6v2H7v10h10v-4h2v6H5z"></path>
-        </svg>
+        <small><i class="fa-solid fa-up-right-from-square" style="vertical-align: 0em"></i></small>
+      </button><br />
+      <button class="btn-primary message_dismiss" id="llm_click_close">
+        <i class="fa-solid fa-xmark icon_on_text_button"></i>Close
       </button>
-      <button class="btn-primary message_dismiss" id="llm_click_close">Close</button>
-      <p style="font-size: 0.8em">
+    </p>
+    <div id="secondary_notices">
+      <p>
         If you don't see a VisualPDE-tailored chat, please sign in to Google, then open the LLM again.
       </p>
     </div>
-
-    <div id="comboBCs_ui" class="ui hidden">
-      <div
-        class="dg ac"
-        id="comboBCsGUIContainer"
-        style="position: relative"
-      ></div>
-      <div class="button" id="close-bcs-ui">
-        <i class="fa-solid fa-circle-xmark"></i>
-      </div>
-      <i
-        class="arrow left fa-solid fa-arrow-left-long fa-inverse"
-        data-fa-transform="grow-1 fa-border"
-      ></i>
-      <i
-        class="arrow right fa-solid fa-arrow-right-long fa-inverse"
-        data-fa-transform="grow-1 fa-border"
-      ></i>
-      <i
-        class="arrow top fa-solid fa-arrow-up-long fa-inverse"
-        data-fa-transform="grow-1 fa-border"
-      ></i>
-      <i
-        class="arrow bottom fa-solid fa-arrow-down-long fa-inverse"
-        data-fa-transform="grow-1 fa-border"
-      ></i>
-    </div>
-
-    <div id="share_panel" class="ui hidden popout_panel">
-      <div class="container">
-        <div id="title">Share your simulation</div>
-        <div id="link" class="button">
-          <i id="long-link" class="share-icon fa-solid fa-link"></i>Copy
-          link<span id="shortenedLabel">mini</span>
-        </div>
-        <div id="screenshot" class="button">
-          <i class="share-icon fa-solid fa-camera"></i>Save image
-        </div>
-        <div>
-          <div id="record" class="button">
-            <i class="share-icon fa-solid fa-video"></i>Record clip
-          </div>
-          <select id="video_quality">
-            <option value="SD">SD</option>
-            <option value="HD" selected>HD</option>
-            <option value="UHD">UHD</option>
-          </select>
-        </div>
-        <div>
-          <div id="embed" class="button">
-            <i class="share-icon fa-solid fa-code"></i>Embed
-          </div>
-          <select id="embed_ui_type">
-            <option value="full">Full UI</option>
-            <option value="story">Basic UI</option>
-            <option value="none">No UI</option>
-          </select>
-        </div>
-        <div class="cite_paper">
-          <a href="https://doi.org/10.1007/s11538-023-01218-4" target="_blank"
-            >Cite the paper</a
-          >
-        </div>
-      </div>
-      <div class="arrow"></div>
-    </div>
-
-    <div id="help_panel" class="ui hidden popout_panel">
-      <div class="container">
-        <div id="title">Help</div>
-        <a
-          ><div id="start_tour" class="button">
-            <i class="share-icon fa-solid fa-route"></i>Give me the tour
-          </div></a
-        >
-        <a href="/user-guide/quick-start" target="_blank"
-          ><div id="quick_start" class="button">
-            <i class="share-icon fa-solid fa-forward"></i>Quick start
-          </div></a
-        >
-        <a href="/user-guide/FAQ" target="_blank"
-          ><div id="faqs" class="button">
-            <i class="share-icon fa-solid fa-clipboard-question"></i>FAQs
-          </div></a
-        >
-        <a href="/user-guide/advanced-options" target="_blank"
-          ><div id="advanced" class="button">
-            <i class="share-icon fa-solid fa-gears"></i>Advanced options
-          </div></a
-        >
-        <a href="/user-guide" target="_blank"
-          ><div id="more" class="button">
-            <i class="share-icon fa-solid fa-question"></i>More...
-          </div></a
-        >
-      </div>
-      <div class="arrow"></div>
-    </div>
-
-    <div class="ui hidden colourbarMain prevent-select" id="colourbar">
-      <div class="label colourbarLabel" id="minLabel">0</div>
-      <div class="label colourbarLabel" id="midLabel">0.5</div>
-      <div class="label colourbarLabel" id="maxLabel">1</div>
-    </div>
-
-    <div class="ui hidden dataContainer" id="dataContainer">
-      <div class="dataItem prevent-select" id="timeDisplay">
-        <div class="label timeLabel" id="timeLabel">$t=$</div>
-        <div class="label timeLabel" id="timeValue"></div>
-      </div>
-      <div class="dataItem prevent-select" id="integralDisplay">
-        <div class="label integralLabel" id="integralLabel"></div>
-        <div class="label integralLabel" id="integralValue"></div>
-      </div>
-    </div>
-
-    <input id="checkpointInput" type="file" style="visibility: hidden" />
-
-    <div
-      class="ui dataContainer"
-      id="dataContainerStats"
-      style="visibility: hidden; display: block"
-    >
-      <div class="dataItem prevent-select" id="rateOfProgressDisplay">
-        <div class="label rateOfProgressLabel">$\frac{\d t}{\d t}=$</div>
-        <div class="label rateOfProgressLabel" id="rateOfProgressValue"></div>
-      </div>
-    </div>
-
-    <div class="clickArea top hidden" id="topClickArea">
-      <div></div>
-    </div>
-    <div class="clickArea bottom hidden" id="bottomClickArea">
-      <div></div>
-    </div>
-    <div class="clickArea left hidden" id="leftClickArea">
-      <div></div>
-    </div>
-    <div class="clickArea right hidden" id="rightClickArea">
-      <div></div>
-    </div>
-
-    <div id="probeChartContainer" class="ui probeChart" style="display: none">
-      <canvas id="probeChart"></canvas>
-      <div id="probeChartTitle" class="title">Time</div>
-      <button id="probeChartMinimise" class="minimise">
-        <i class="fa-solid fa-circle-xmark"></i>
-      </button>
-    </div>
-    <div class="ui hidden ui_button" id="probeChartMaximise">
-      <i class="fa-solid fa-chart-line"></i>
-    </div>
-    <div id="clickDetector" class="hidden"></div>
   </div>
+
+  <!-- What's new message -->
+  <div class="message big-popup" id="updates-message">
+    <div class="centre_symbol"><i class="fa-solid fa-star"></i></div>
+    <p class="header">What’s new with VisualPDE?</p>
+    <div class="feature-list">
+      <div class="feature">
+        <div class="feature-icon">8</div>
+        <div class="feature-text">
+          <div>Solve up to <strong>8</strong> equations at&nbsp;once</div>
+          <div class="soft">Explore countless new possibilities.</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">
+          $\int$
+        </div>
+        <div class="feature-text">
+          <div>Use $\int_{\domain} f(x,y,u,...) \, \d x \, \d y$</div>
+          <div class="soft">Try the new <code>GlobalInt</code> <a
+              href="/user-guide/advanced-options#special-functions"
+              target="_blank">syntax</a>.</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon"><i class="fa-solid fa-broom"></i></div>
+        <div class="feature-text">
+          <div>Small UI changes</div>
+          <div class="soft">We've reorganised a few things as VisualPDE grows more powerful</div>
+        </div>
+      </div>
+    </div>
+    <button class="btn-primary message_ok highlight" id="updates_message_ok">
+      Got it!
+    </button>
+  </div>
+
+  <div class="message big-popup wide" id="diffusionMatrix_ui">
+    <p id="diffusionMatrixEquation"></p>
+    <div id="diffusionMatrixGrid"></div>
+    <button class="btn-primary message_ok highlight" id="diffusionMatrix_ok">
+      OK
+    </button>
+  </div>
+
+
+  <div class="ui hidden ui_button" id="equations" title="Edit equations"></div>
+  <div id="left_ui" class="ui hidden">
+    <div id="equation_display">
+      <div id="equation_display_box">
+        <div id="typeset_equation"></div>
+      </div>
+    </div>
+    <div class="dg ac" id="leftGUIContainer" style="position: relative"></div>
+    <div id="left_ui_arrow" class="ui"></div>
+  </div>
+  <div tabindex="-1" class="ui hidden ui_button" id="play_pause_placeholder"></div>
+  <div class="ui hidden ui_button" id="play" title="Play (space)">
+    <i class="fa-solid fa-play"></i>
+  </div>
+  <div class="ui hidden ui_button" id="pause" title="Pause (space)">
+    <i class="fa-solid fa-pause"></i>
+  </div>
+  <div class="ui hidden ui_button" id="erase" title="Restart (R)">
+    <i class="fa-solid fa-arrow-rotate-left"></i>
+  </div>
+  <div class="ui hidden ui_button" id="views" title="Views">
+    <i class="fa-solid fa-layer-group"></i>
+  </div>
+  <div id="views_ui" class="ui hidden">
+    <div class="dg ac" id="viewsGUIContainer" style="position: relative"></div>
+    <div id="views_ui_arrow"></div>
+  </div>
+  <div class="ui hidden ui_button" id="settings" title="Settings">
+    <i class="fa-solid fa-wrench"></i>
+  </div>
+  <div id="right_ui" class="ui hidden">
+    <div class="dg ac" id="rightGUIContainer" style="position: relative"></div>
+    <div id="right_ui_arrow"></div>
+  </div>
+  <div class="ui hidden ui_button" id="help" title="Help">
+    <i class="fa-solid fa-circle-question"></i>
+  </div>
+  <div class="ui hidden ui_button" id="share" title="Share">
+    <i class="fa-solid fa-share-from-square"></i>
+  </div>
+  <div class="ui hidden ui_button" id="llm-bot" title="LLM support">
+    <i class="fa-solid fa-robot"></i>
+  </div>
+
+  <div class="message small" id="link_copied">
+    <p>Copied to clipboard</p>
+  </div>
+  <div class="message small" id="get_help">
+    <p>Get help here anytime</p>
+  </div>
+  <div class="message small" id="llm-bot-message">
+    <p>Try out LLM support</p>
+  </div>
+  <div class="message small mid" id="brush_disabled">
+    <p>Brush disabled</p>
+  </div>
+  <div class="message small mid" id="recording">
+    <div class="circle"></div>
+    <p>Recording <span id="recording_time"></span></p>
+    <div class="ui_button" id="stop_recording" title="Stop recording">
+      <i class="fa-solid fa-video-slash"></i>
+    </div>
+  </div>
+  <div class="message small" id="use_Chrome">
+    <p>Chrome/Firefox on desktop are recommended for video recording</p>
+  </div>
+
+  <a id="logo" title="To VisualPDE.com" class="ui hidden" href="/" target="_blank"><img src="images/vpde-logotype-light.webp" alt="VisualPDE" width=100></a>
+
+  <div class="message" id="top_message" title="Try clicking!">
+    <p>Try clicking!</p>
+  </div>
+
+  <div id="comboBCs_ui" class="ui hidden">
+    <div class="dg ac" id="comboBCsGUIContainer" style="position: relative"></div>
+    <div class="button" id="close-bcs-ui">
+      <i class="fa-solid fa-circle-xmark"></i>
+    </div>
+    <i class="arrow left fa-solid fa-arrow-left-long fa-inverse" data-fa-transform="grow-1 fa-border"></i>
+    <i class="arrow right fa-solid fa-arrow-right-long fa-inverse" data-fa-transform="grow-1 fa-border"></i>
+    <i class="arrow top fa-solid fa-arrow-up-long fa-inverse" data-fa-transform="grow-1 fa-border"></i>
+    <i class="arrow bottom fa-solid fa-arrow-down-long fa-inverse" data-fa-transform="grow-1 fa-border"></i>
+  </div>
+
+  <div id="share_panel" class="ui hidden popout_panel">
+    <div class="container">
+      <div id="title">Share your simulation</div>
+      <div id="link" class="button">
+        <i id="long-link" class="share-icon fa-solid fa-link"></i>Copy
+        link<span id="shortenedLabel">mini</span>
+      </div>
+      <div id="screenshot" class="button">
+        <i class="share-icon fa-solid fa-camera"></i>Save image
+      </div>
+      <div>
+        <div id="record" class="button">
+          <i class="share-icon fa-solid fa-video"></i>Record clip
+        </div>
+        <select id="video_quality">
+          <option value="SD">SD</option>
+          <option value="HD" selected>HD</option>
+          <option value="UHD">UHD</option>
+        </select>
+      </div>
+      <div>
+        <div id="embed" class="button">
+          <i class="share-icon fa-solid fa-code"></i>Embed
+        </div>
+        <select id="embed_ui_type">
+          <option value="full">Full UI</option>
+          <option value="story">Basic UI</option>
+          <option value="none">No UI</option>
+        </select>
+      </div>
+      <div class="cite_paper">
+        <a href="https://doi.org/10.1007/s11538-023-01218-4" target="_blank">Cite the paper</a>
+      </div>
+    </div>
+    <div class="arrow"></div>
+  </div>
+
+  <div id="help_panel" class="ui hidden popout_panel">
+    <div class="container">
+      <div id="title">Help</div>
+      <a>
+        <div id="start_tour" class="button">
+          <i class="share-icon fa-solid fa-route"></i>Give me the tour
+        </div>
+      </a>
+      <a href="/user-guide/quick-start" target="_blank">
+        <div id="quick_start" class="button">
+          <i class="share-icon fa-solid fa-forward"></i>Quick start
+        </div>
+      </a>
+      <a href="/user-guide/FAQ" target="_blank">
+        <div id="faqs" class="button">
+          <i class="share-icon fa-solid fa-clipboard-question"></i>FAQs
+        </div>
+      </a>
+      <a href="/user-guide/advanced-options" target="_blank">
+        <div id="advanced" class="button">
+          <i class="share-icon fa-solid fa-gears"></i>Advanced options
+        </div>
+      </a>
+      <a href="/user-guide" target="_blank">
+        <div id="more" class="button">
+          <i class="share-icon fa-solid fa-question"></i>More...
+        </div>
+      </a>
+    </div>
+    <div class="arrow"></div>
+  </div>
+
+  <div class="ui hidden colourbarMain prevent-select" id="colourbar">
+    <div class="label colourbarLabel" id="minLabel">0</div>
+    <div class="label colourbarLabel" id="midLabel">0.5</div>
+    <div class="label colourbarLabel" id="maxLabel">1</div>
+  </div>
+
+  <div class="ui hidden dataContainer" id="dataContainer">
+    <div class="dataItem prevent-select" id="timeDisplay">
+      <div class="label timeLabel" id="timeLabel">$t=$</div>
+      <div class="label timeLabel" id="timeValue"></div>
+    </div>
+    <div class="dataItem prevent-select" id="integralDisplay">
+      <div class="label integralLabel" id="integralLabel"></div>
+      <div class="label integralLabel" id="integralValue"></div>
+    </div>
+  </div>
+
+  <input id="checkpointInput" type="file" style="visibility: hidden" />
+
+  <div class="ui dataContainer" id="dataContainerStats" style="visibility: hidden; display: block">
+    <div class="dataItem prevent-select" id="rateOfProgressDisplay">
+      <div class="label rateOfProgressLabel">$\frac{\d t}{\d t}=$</div>
+      <div class="label rateOfProgressLabel" id="rateOfProgressValue"></div>
+    </div>
+  </div>
+
+  <div class="clickArea top hidden" id="topClickArea">
+    <div></div>
+  </div>
+  <div class="clickArea bottom hidden" id="bottomClickArea">
+    <div></div>
+  </div>
+  <div class="clickArea left hidden" id="leftClickArea">
+    <div></div>
+  </div>
+  <div class="clickArea right hidden" id="rightClickArea">
+    <div></div>
+  </div>
+
+  <div id="probeChartContainer" class="ui probeChart" style="display: none">
+    <canvas id="probeChart"></canvas>
+    <div id="probeChartTitle" class="title">Time</div>
+    <button id="probeChartMinimise" class="minimise">
+      <i class="fa-solid fa-circle-xmark"></i>
+    </button>
+  </div>
+  <div class="ui hidden ui_button" id="probeChartMaximise">
+    <i class="fa-solid fa-chart-line"></i>
+  </div>
+  <div id="clickDetector" class="hidden"></div>
+</div>
 
   <noscript>
     <link rel="stylesheet" href="/assets/css/noscript.css" />
-    <a href="/"
-      ><img class="logo" src="/assets/images/logo_title_white.webp"
-    /></a>
+    <a href="/"><img class="logo" src="/assets/images/logo-splash.webp" /></a>
     <p class="noscript">
       VisualPDE makes heavy use of JavaScript to enable in-browser
       simulations.<br />Enable JavaScript in your browser settings to experience
@@ -652,5 +629,6 @@
     </p>
   </noscript>
 
-  <script src="/sim/scripts/register_sw.js" async></script>
+<script src="/sim/scripts/register_sw.js" async></script>
+
 </html>

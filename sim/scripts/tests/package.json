@@ -1,0 +1,8 @@
+{
+  "name": "visualpde-sim-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bash run.sh"
+  }
+}

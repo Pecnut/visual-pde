@@ -67,6 +67,7 @@ div#home_box_1 {
   position: relative;
   font-size: 16px;
   color: var(--inverse-text-color);
+  overflow: hidden;
 }
 
 #sim {

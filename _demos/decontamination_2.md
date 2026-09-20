@@ -14,7 +14,7 @@ thumbnail: /assets/images/Decontamination.webp
 <a class="site-title" rel="author" href="{{ "/demos" | relative_url }}">
         <img
             class="light-mode-img"
-            src="/assets/images/logo.webp"
+            src="/assets/images/logo-light.webp"
             alt="Heart-shaped logo"
         /><img
             class="dark-mode-img"

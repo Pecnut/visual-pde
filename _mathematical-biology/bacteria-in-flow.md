@@ -60,4 +60,4 @@ $$\pd{C}{t}= - u\pd{C}{x} - kC,$$
 
 where $u$ is the flow speed, $k$ is the decay rate, and $x$ is the distance along the river.
 
-To play with the details of this model, try out the [full-screen simulation](/sim/?preset=bacteriaInAReach). In that simulation, sliders can be found by clicking <span class='click_sequence'>{{ layout.equations }} → **Parameters**</span>
+To play with the details of this model, try out the [full-screen simulation](/sim/?preset=bacteriaInAReach). In that simulation, sliders can be found by clicking <span class='click_sequence'>{{ layout.equations }} → **Parameters and notation** → **Parameters**</span>

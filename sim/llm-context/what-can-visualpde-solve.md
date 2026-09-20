@@ -8,7 +8,7 @@ $$\frac{du}{dt} = \nabla \cdot (D_u \nabla u) + f_u,$$
 
 where $D_u$ and $f_u$ are functions of $u$, $t$, and space that you can choose. For example, if $f_u=0$ and $D_u$ is a constant, you have [the heat equation](/basic-pdes/heat-equation). 
 
-The most complicated type is a coupled system of PDEs in four unknowns, $u$, $v$, $w$ and $q$:
+VisualPDE supports systems of up to 8 coupled unknowns; the same pattern below, illustrated for four unknowns $u$, $v$, $w$ and $q$, extends directly to further variables:
 
 $$\begin{aligned}
 t_u\frac{du}{dt} &= \nabla \cdot(D_{uu}\nabla u+D_{uv}\nabla v+D_{uw}\nabla w+D_{uq}\nabla q) + f_u,\\
@@ -35,10 +35,10 @@ $$M \frac{du}{dt} = \nabla\cdot(D\nabla u) + f,$$
 
 where
 
-* $u$ is a vector of one, two, three or four unknowns,
+* $u$ is a vector of between one and eight unknowns,
 * $M$ is a diagonal matrix with potentially some zeros on the diagonal; you might know this as a 'mass matrix',
 * $D$ is a possibly non-constant matrix that may contain zeros; you might know this as a 'diffusion tensor',
-* $f$ is a vector of one, two, three or four components that contains our interaction or kinetic terms.
+* $f$ is a vector of components (one per unknown) that contains our interaction or kinetic terms.
 
 VisualPDE allows you to easily change the [number of components](quick-start#equations-panel) and the [boundary conditions](quick-start#boundary-conditions). You can set initial conditions just by clicking the screen.
 

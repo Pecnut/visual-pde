@@ -13,29 +13,29 @@
       <div class="wrapper">
 
         <header class="post-header">
-          <h1 class="post-title">Create</h1>
+          <h1 class="post-title">Create your own simulation in 6 minutes</h1>
         </header>
 
         {{ content }}
 
-        <div class="top_container">
+        <!-- <div class="top_container">
             <iframe loading="lazy" id="sim" title="A simulation of a complex Ginzburg–Landau equation" src="/sim/?preset=complexGinzburgLandau&colourmap=water&numTimestepsPerFrame=30&lite&clean&sf=0.5" style="visibility:hidden"></iframe>
             <div>
                 <p>Got your own equation? Simulate and share with VisualPDE's powerful creation tools.</p>
                 <p>Tour the customisable <a href="/sim/?tour">simulator</a>, get inspired by the tutorials below, or check out the <a href="/user-guide">documentation</a> for a complete guide to VisualPDE.</p>
             </div>
-        </div>
+        </div> -->
 
         <div class="video_container">
           <p class="emphasize">New to VisualPDE? Get up and running in 6 minutes.</p>
-          <iframe class="tutorial_video" src="https://www.youtube-nocookie.com/embed/OXvGmlyKn4w?si=Yz-bdCho1ja0GHxg?modestbranding=1&iv_load_policy=3&cc_load_policy=1" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+          <iframe class="tutorial_video" src="https://www.youtube-nocookie.com/embed/zNwz1F3_TGY?si=vtw7drPltrs7B1y8&modestbranding=1&iv_load_policy=3&cc_load_policy=1" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
         </div>
-        
-        <p class="emphasize">Looking for more help? Check out these guides:</p>
+
+        <!-- <p class="emphasize">Looking for more help? Check out these guides:</p>
         <div class='topic_tiles' id="topic_tiles">
-          {% assign lessons = site["user-guide"] 
+          {% assign lessons = site["user-guide"]
             | sort: 'lesson_number' %}
-          
+
             {% for item in lessons limit:3 %}
               <a class='topic_tile' href='{{ item.url }}'>
                 <div class='topic_banner' style="background-image:url('{{ item.thumbnail }}')">
@@ -49,7 +49,7 @@
                 </div>
               </a>
             {% endfor %}
-        </div>
+        </div> -->
 
       </div>
     </main>

@@ -34,14 +34,15 @@ theme: minima
 plugins:
   - jekyll-feed
   - jekyll-sitemap
+permalink: /news/:year-:month-:day-:title/
 sass:
   quiet_deps: true
 
 # Nav bar
 header_pages:
   - explore.md
-  - create.md
-  - contact.md
+  - user-guide.md
+  - news.md
   - about.md
 
 collections:

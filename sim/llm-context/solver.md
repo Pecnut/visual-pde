@@ -6,7 +6,7 @@ We are always looking for ways to improve and extend VisualPDE, especially ways 
 
 ### The equations
 
-VisualPDE can solve a variety of PDE systems posed in 1D or 2D space, many of which are straightforward extensions of the two-species reaction–diffusion system,
+VisualPDE can solve a variety of PDE systems posed in 1D or 2D space, many of which are straightforward extensions of the two-variables reaction–diffusion system,
 
 $$
 \begin{aligned}
@@ -68,7 +68,7 @@ in the [finite difference operator](#spatial-discretisation) described above.
 
 #### Robin
 
-Robin boundary conditions are a natural combination of Dirichlet and Neumann conditions, which we pose in the form of a generalised Neumann condition $\frac{du}{dn}|_{\partial\Omega} = a(u,x,y,t)$, where the right-hand side can now depend on $u$ (and any other unknown in multi-species systems). These conditions are also implemented with ghost nodes. For example, enforcing $\frac{du}{dn}|_{\partial\Omega} = u|_{\partial\Omega}$ at the leftmost $x$ boundary of a rectangular domain is achieved in practice by taking
+Robin boundary conditions are a natural combination of Dirichlet and Neumann conditions, which we pose in the form of a generalised Neumann condition $\frac{du}{dn}|_{\partial\Omega} = a(u,x,y,t)$, where the right-hand side can now depend on $u$ (and any other unknown in multi-variables systems). These conditions are also implemented with ghost nodes. For example, enforcing $\frac{du}{dn}|_{\partial\Omega} = u|_{\partial\Omega}$ at the leftmost $x$ boundary of a rectangular domain is achieved in practice by taking
 
 $$\textstyle u(x-\Delta x,y) = u(x+\Delta x,y) + 2 u(x,y)\,\Delta x$$
 
@@ -83,6 +83,10 @@ VisualPDE also allows you to specify different boundary conditions on different 
 Solving PDEs is hard. To solve them in real time in your browser, VisualPDE gives all the hard work to the graphics chip (GPU) on your device, making use of [WebGL](https://en.wikipedia.org/wiki/WebGL) and a low-level shader language called [GLSL](https://en.wikipedia.org/wiki/OpenGL_Shading_Language).
 
 Every time your browser requests a frame from VisualPDE (which might be up to 60 times per second), some [JavaScript](https://en.wikipedia.org/wiki/JavaScript) organises the solving of the discretised equations, displaying the solution, and incorporating anything you've drawn, which all happen on the GPU. Each frame, we typically perform hundreds of timesteps to give you a smooth experience, mitigating many of the limitations of our [timestepping schemes](#timestepping). If you're interested in the finest details of the implementation, the source code for the entire site is freely available to view, reuse, and repurpose on [GitHub](https://github.com/Pecnut/visual-pde).
+
+### Many variables at once
+
+The state of a system with up to 4 variables fits naturally into a single image: each variables is stored in one of the four colour channels (red, green, blue, alpha) of a texture, so a single GPU pass can update all of them together. VisualPDE supports systems of up to 8 variables by using a second such texture (each again holding up to 4 variables) and updating both at once via [multiple render targets](https://en.wikipedia.org/wiki/Multiple_Render_Targets), a standard GPU technique for writing to more than one image in a single pass. Cross-diffusion and reaction terms can still freely couple any variables to any other, regardless of which texture each lives in, and all four [timestepping schemes](#timestepping) are supported regardless of the number of variables.
 
 ### Accuracy and precision
 

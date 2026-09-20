@@ -4,3 +4,4 @@ _site/
 Gemfile.lock
 *.psd
 node_modules/
+sim/scripts/tests/generated/

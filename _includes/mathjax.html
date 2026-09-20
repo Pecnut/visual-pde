@@ -48,8 +48,8 @@
 <!-- Only load MathJax if we're not at root of the site, speeding up blocking load -->
 <script type="text/javascript">
     if (!window.location.pathname.match(/^\/$/)) {
-        document.write('<script id="MathJax-script" async src="../assets/js/mathjax/es5/tex-chtml-full.js"><\/script>')
+        document.write('<script id="MathJax-script" async src="{{ "/assets/js/mathjax/es5/tex-chtml-full.js" | relative_url }}"><\/script>')
     }
 </script>
 
-<script src="../assets/js/fitty.min.js"></script>
+<script src="{{ '/assets/js/fitty.min.js' | relative_url }}"></script>

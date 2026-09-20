@@ -33,12 +33,10 @@ onSubmit="page_search(document.getElementById('pageSearchInput').value); return 
 
 <div id="toc"></div>
 
----
-
 ## Sharing and citing <a class="anchor" id='sharing'>
 
 ### How do I cite VisualPDE in my article?
-The VisualPDE paper is out! You can find it [online](https://doi.org/10.1007/s11538-023-01218-4) for free and cite it as 
+The VisualPDE paper is out! You can find it [online](https://doi.org/10.1007/s11538-023-01218-4) for free and cite it as
 
 Walker, B.J., Townsend, A.K., Chudasama, A.K. et al. VisualPDE: Rapid interactive simulations of partial differential equations. Bulletin of Mathematical Biology 85, 113 (2023).
 
@@ -65,7 +63,7 @@ Yes you can! Clicking {{ layout.share }} and then 'Embed' will put an [iframe](h
 
 In principle, you can have as many embedded simulations on your site as you want. In practice, having lots of simulations running at once might cause stuttering on some devices. You can mitigate this by pausing simulations (VisualPDE consumes very few resources when paused) or by only showing a limited number of simulations onscreen at any one time (simulations that are out of view are automatically paused by your browser). You can also make your simulations less computationally demanding by reducing the number of timesteps per frame or the domain size.
 
----
+
 
 ## Errors <a class="anchor" id='errors'>
 Sometimes, mistakes happen. If something has gone wrong, VisualPDE will try its best to describe the error in a helpful way via a pop-up. We try to display a helpful error message to help you identify the problem. More cryptic messages are listed below.
@@ -75,7 +73,7 @@ Sometimes, mistakes happen. If something has gone wrong, VisualPDE will try its 
 Unknown symbol: 'k'
 ```
 
-Here, the quantity 'k' has been used somewhere in one of the many free-text inputs in VisualPDE, but it hasn't been defined. The most common cause of this is using a parameter in the **Definitions** tab without defining it in the **Parameters** tab. Check your definitions and parameters to resolve this. Be careful to define parameters as constant numbers or in terms of other parameters – dependence on space, time, or species is not (yet) supported!
+Here, the quantity 'k' has been used somewhere in one of the many free-text inputs in VisualPDE, but it hasn't been defined. The most common cause of this is using a parameter in the **Definitions** tab without defining it in the **Parameters** tab. Check your definitions and parameters to resolve this. Be careful to define parameters as constant numbers or in terms of other parameters – dependence on space, time, or variables is not (yet) supported!
 
 ### Cyclic variables/parameters detected <a class="anchor" id='cyclic'>
 ```
@@ -91,20 +89,20 @@ There is no solution to this system of equations, so check your definitions and 
 ### My error looks nothing like any of these
 Sometimes, errors won't look anything like these examples. If this is the case and the error message doesn't help you in resolving it, please follows the steps outlined [below](#error) and help make VisualPDE as stable as possible!
 
-NOTE: VisualPDE sometimes won't warn you about multiple errors that involve the same error message (we're working on it). So, if you fix an error involving 'k', you might not be warned about later errors involving 'k' in the same session. Reloading the page (making sure to have copied your configuration URL first!) is a good way of getting around this for now.
+Note: VisualPDE sometimes won't warn you about multiple errors that involve the same error message (we're working on it). So, if you fix an error involving 'k', you might not be warned about later errors involving 'k' in the same session. Reloading the page (making sure to have copied your configuration URL first!) is a good way of getting around this for now.
 
 ### The buttons don't work, but I want to keep playing!
-Very rarely, the simulation and the user interface may become unresponsive. If this happens: 
+Very rarely, the simulation and the user interface may become unresponsive. If this happens:
 1. Click {{ layout.help }} to bring up the documentation to try to solve your problem.
 1. Reload the page. Sadly, this won't preserve the configuration beyond that specified in the URL.
-If the issue is persistent and you're confident that you've followed all the steps outlined in this guide, please report your issue as described [below](#error). 
+If the issue is persistent and you're confident that you've followed all the steps outlined in this guide, please report your issue as described [below](#error).
 
 ### How do I report an issue? <a class="anchor" id='error'>
 Sometimes, something might go wrong (e.g. a part of the user interface is doing something strange, or the simulations are not working on your device). If you encounter an issue that can't be resolved using the [documentation](/user-guide), we'd love to hear from you at [bugs@visualpde.com](mailto:bugs@visualpde.com).
 
-If you can, it will help us a lot if you could click <span class='click_sequence'>{{ layout.settings }} → **Misc.** → **Debug** → **Copy debug**</span> and paste the contents into your email. This will contain information about your current configuration that will help us resolve the problem.
+If you can, it will help us a lot if you could click <span class='click_sequence'>{{ layout.settings }} → **More...** → **Developer tools** → **Copy debug**</span> and paste the contents into your email. This will contain information about your current configuration that will help us resolve the problem.
 
----
+
 
 ## Beyond VisualPDE.com <a class="anchor" id='extending'>
 
@@ -115,7 +113,7 @@ For instance, a popular way to create custom teaching materials is to simply inc
 
 If you want to do more than this allows, we'd love to hear from you at [hello@visualpde.com](mailto:hello@visualpde.com) so that we can help bring VisualPDE into your teaching, research, or outreach activities.
 
-### I want to use VisualPDE for my business - can I?
+### I want to use VisualPDE for my business – can I?
 Almost certainly! However, we want to make sure that we do knowledge exchange properly, so do get in touch with us at [hello@visualpde.com](mailto:hello@visualpde.com) so that we can make sure you'll get the best out of VisualPDE.
 
 ### I've got a feature request – who do I contact?

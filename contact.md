@@ -4,5 +4,8 @@
 
 title: Contact
 layout: suggestions
+permalink: /contact/
+thumbnail: /assets/images/envelope.webp
+extract: Get in touch with VisualPDE
 ---
 

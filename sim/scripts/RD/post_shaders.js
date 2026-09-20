@@ -10,6 +10,10 @@ export function computeDisplayFunShaderTop() {
     uniform float L_y;
     uniform float L_min;
     uniform float t;
+    uniform float globalIntegralValue1;
+    uniform float globalIntegralValue2;
+    uniform float globalIntegralValue3;
+    uniform float globalIntegralValue4;
     uniform bool customSurface;
     uniform bool vectorField;
     uniform bool overlayLine;
@@ -105,6 +109,70 @@ export function computeDisplayFunShaderMid() {
         gl_FragColor = vec4(value, 0.0, height, yVecComp);`;
 }
 
+// MRT counterpart of computeDisplayFunShaderTop(), used only once
+// numGroups(numSpecies)>1 (numSpecies>4). Adds a second sampler for group 1's current
+// state, so a display/probe expression (FUN, HEIGHT, OVERLAYEXPR, PROBE_FUN, ...) can
+// reference species 5-8 as well. Still single-output (gl_FragColor) - unlike the main
+// simulation shader, display/post-processing never needs to *write* raw per-species state,
+// only read it to compute one derived value, so no GLSL3/MRT output plumbing is needed here.
+export function computeDisplayFunShaderTopMRT() {
+  return computeDisplayFunShaderTop().replace(
+    "uniform sampler2D textureSource;",
+    "uniform sampler2D textureSource;\n    uniform sampler2D textureSourceGroup1;",
+  );
+}
+
+// MRT counterpart of computeDisplayFunShaderMid(): samples group 1's 5-point stencil
+// (uvwq2-family) from textureSourceGroup1, in addition to the existing group-0 stencil, so
+// FUN/HEIGHT/XVECFUN/YVECFUN/OVERLAYEXPR substitutions (already group-aware via
+// parseShaderString) resolve correctly for group-1 species references.
+export function computeDisplayFunShaderMidMRT() {
+  return computeDisplayFunShaderMid().replace(
+    "float value = FUN;",
+    `vec4 uvwq2 = texture2D(textureSourceGroup1, textureCoords);
+        vec4 uvwq2L = texture2D(textureSourceGroup1, textureCoords + vec2(-step_x, 0.0));
+        vec4 uvwq2R = texture2D(textureSourceGroup1, textureCoords + vec2(+step_x, 0.0));
+        vec4 uvwq2T = texture2D(textureSourceGroup1, textureCoords + vec2(0.0, +step_y));
+        vec4 uvwq2B = texture2D(textureSourceGroup1, textureCoords + vec2(0.0, -step_y));
+
+        vec4 uvwq2X = (uvwq2R - uvwq2L) / (2.0*dx);
+        vec4 uvwq2Y = (uvwq2T - uvwq2B) / (2.0*dy);
+        vec4 uvwq2XF = (uvwq2R - uvwq2) / dx;
+        vec4 uvwq2YF = (uvwq2T - uvwq2) / dy;
+        vec4 uvwq2XB = (uvwq2 - uvwq2L) / dx;
+        vec4 uvwq2YB = (uvwq2 - uvwq2B) / dy;
+        vec4 uvwq2XX = (uvwq2R - 2.0*uvwq2 + uvwq2L) / (dx * dx);
+        vec4 uvwq2YY = (uvwq2T - 2.0*uvwq2 + uvwq2B) / (dy * dy);
+
+        // At boundaries, compute gradients using one-sided differences (group 1).
+        if (textureCoords.x - step_x < 0.0) {
+          uvwq2X = (uvwq2R - uvwq2) / dx;
+          uvwq2XF = uvwq2X;
+          uvwq2XB = uvwq2X;
+        }
+
+        if (textureCoords.x + step_x > 1.0) {
+          uvwq2X = (uvwq2 - uvwq2L) / dx;
+          uvwq2XF = uvwq2X;
+          uvwq2XB = uvwq2X;
+        }
+
+        if (textureCoords.y - step_y < 0.0) {
+          uvwq2Y = (uvwq2T - uvwq2) / dy;
+          uvwq2YF = uvwq2Y;
+          uvwq2YB = uvwq2Y;
+        }
+
+        if (textureCoords.y + step_y > 1.0) {
+          uvwq2Y = (uvwq2 - uvwq2B) / dy;
+          uvwq2YF = uvwq2Y;
+          uvwq2YB = uvwq2Y;
+        }
+
+        float value = FUN;`,
+  );
+}
+
 // If the sample point is near the edge of the domain, set all vector components to zero.
 export function postShaderDomainIndicatorVField(fun) {
   return `
@@ -198,24 +266,26 @@ export function minMaxShader() {
 }
 
 export function sumShader() {
-  return `varying vec2 textureCoords; 
+  return `varying vec2 textureCoords;
     uniform sampler2D textureSource;
     uniform vec2 srcResolution;
 
     void main()
     {
-      // Sum the nearby pixels in the texture source.
+      // Sum the nearby pixels in the texture source, independently per channel (so this can
+      // reduce up to 4 quantities packed into r/g/b/a at once - e.g. the global integrals -
+      // as well as the single-channel case, which just leaves g/b/a as 0).
       ivec2 outTexel = ivec2(gl_FragCoord.xy);
-      float sumVal = 0.0;
+      vec4 sumVal = vec4(0.0);
       for (int y = 0; y < 2; ++y) {
         for (int x = 0; x < 2; ++x) {
           ivec2 srcTexel = outTexel * 2 + ivec2(x, y);
           if (srcTexel.x < int(srcResolution.x) && srcTexel.y < int(srcResolution.y)) {
-            sumVal += texture2D(textureSource, (vec2(srcTexel) + 0.5) / srcResolution).r;
+            sumVal += texture2D(textureSource, (vec2(srcTexel) + 0.5) / srcResolution);
           }
         }
       }
-      gl_FragColor = vec4(sumVal, 0.0, 0.0, 0.0);
+      gl_FragColor = sumVal;
     }`;
 }
 
@@ -229,6 +299,10 @@ export function probeShader() {
     uniform float L_y;
     uniform float L_min;
     uniform float t;
+    uniform float globalIntegralValue1;
+    uniform float globalIntegralValue2;
+    uniform float globalIntegralValue3;
+    uniform float globalIntegralValue4;
 		uniform bool pointProbe;
     uniform bool probeUVs;
     uniform float probeU;
@@ -300,4 +374,45 @@ export function probeShader() {
       // Compute the probe value.
       gl_FragColor = vec4(PROBE_FUN, 0.0, x, y);
     }`;
+}
+
+// MRT counterpart of probeShader(), used only once numGroups(numSpecies)>1. Adds a second
+// sampler for group 1's current state, sampling the same 9-point stencil (at probeTexCoords)
+// so PROBE_FUN can reference species 5-8 as well. Still single-output (gl_FragColor) - see
+// computeDisplayFunShaderTopMRT's comment for why no GLSL3/MRT output plumbing is needed.
+export function probeShaderMRT() {
+  return probeShader()
+    .replace(
+      "uniform sampler2D textureSource;",
+      "uniform sampler2D textureSource;\n    uniform sampler2D textureSourceGroup1;",
+    )
+    .replace(
+      "      // Compute derivatives.",
+      `      // Sample (group 1).
+      vec4 uvwq2 = texture2D(textureSourceGroup1, probeTexCoords);
+      vec4 uvwq2L = texture2D(textureSourceGroup1, probeTexCoordsL);
+      vec4 uvwq2R = texture2D(textureSourceGroup1, probeTexCoordsR);
+      vec4 uvwq2T = texture2D(textureSourceGroup1, probeTexCoordsT);
+      vec4 uvwq2B = texture2D(textureSourceGroup1, probeTexCoordsB);
+      vec4 uvwq2LL = texture2D(textureSourceGroup1, probeTexCoordsLL);
+      vec4 uvwq2RR = texture2D(textureSourceGroup1, probeTexCoordsRR);
+      vec4 uvwq2TT = texture2D(textureSourceGroup1, probeTexCoordsTT);
+      vec4 uvwq2BB = texture2D(textureSourceGroup1, probeTexCoordsBB);
+
+      // Compute derivatives (group 1).
+      vec4 uvwq2X = (uvwq2R - uvwq2L) / (2.0*dx);
+      vec4 uvwq2Y = (uvwq2T - uvwq2B) / (2.0*dy);
+      vec4 uvwq2XF = (uvwq2R - uvwq2) / dx;
+      vec4 uvwq2YF = (uvwq2T - uvwq2) / dy;
+      vec4 uvwq2XB = (uvwq2 - uvwq2L) / dx;
+      vec4 uvwq2YB = (uvwq2 - uvwq2B) / dy;
+      vec4 uvwq2XFXF = (4.0*uvwq2R - 3.0*uvwq2 - uvwq2RR) / (2.0*dx);
+      vec4 uvwq2YFYF = (4.0*uvwq2T - 3.0*uvwq2 - uvwq2TT) / (2.0*dy);
+      vec4 uvwq2XBXB = (3.0*uvwq2 - 4.0*uvwq2L + uvwq2LL) / (2.0*dx);
+      vec4 uvwq2YBYB = (3.0*uvwq2 - 4.0*uvwq2B + uvwq2BB) / (2.0*dy);
+      vec4 uvwq2XX = (uvwq2R - 2.0*uvwq2 + uvwq2L) / (dx*dx);
+      vec4 uvwq2YY = (uvwq2T - 2.0*uvwq2 + uvwq2B) / (dy*dy);
+
+      // Compute derivatives.`,
+    );
 }

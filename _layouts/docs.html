@@ -15,12 +15,12 @@
         </header>
 
         {{ content }}
-        
+
         <div class='topic_tiles'>
 
-        {% assign lessons = site[page.collection_to_list] 
+        {% assign lessons = site[page.collection_to_list]
           | sort: 'lesson_number' %}
-        
+
         {% for item in lessons %}
           <a class='topic_tile' href='{{ item.url }}'>
             <div class='topic_banner' style="background-image:url('{{ item.thumbnail }}')">
@@ -32,6 +32,18 @@
             </div>
           </a>
         {% endfor %}
+
+        {% assign contact_page = site.pages | where: "permalink", "/contact/" | first %}
+        {% if contact_page %}
+          <a class='topic_tile' href='{{ contact_page.url }}'>
+            <div class='topic_banner' style="background-image:url('{{ contact_page.thumbnail }}')">
+            </div>
+            <div class='container'>
+              <div class='title'>{{ contact_page.title }}</div>
+              <div class='subtitle'>{{ contact_page.extract | default: 'Get in touch with VisualPDE' }}</div>
+            </div>
+          </a>
+        {% endif %}
 
         </div>
 

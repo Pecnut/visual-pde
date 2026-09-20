@@ -20,11 +20,12 @@ Pressing {{ layout.equations }} opens up the **equations panel**.
 
 Here you can:
 * See the [equation being simulated](#equations), here $\pd{u}{t} = \vnabla\cdot(D_u\vnabla u) + f_u$.
-* Set the named functions in the equations, here $D_u$ and $f_u$, under **Definitions**. These can be functions of any of the unknowns, space, and time (here $u$, $x$, $y$, and $t$), and of any parameters that will be defined further down the panel.
+* Set the named functions in the equations, here $D_u$ and $f_u$, under **Equations**. These can be functions of any of the unknowns, space, and time (here $u$, $x$, $y$, and $t$), and of any parameters that will be defined further down the panel.
 * Set the value of any extra parameters.
+* Introduce any notational substitutions to make your equations easier.
 * Set the [boundary conditions](#boundary-conditions).
 * Set the [initial conditions](#initial-conditions).
-* Set the [number and type of equations](#changing-the-equations-) to be solved.
+* Set the [number and type of equations](#equations) to be solved.
 
 ### Domain shape <a class="anchor" id='domain-shape'>
 
@@ -54,21 +55,21 @@ $$\pd{u}{t} = \vnabla \cdot (D_u \vnabla u) + f_u,$$
 
 where $D_u$ and $f_u$ are functions of $u$, $x$, $y$, and $t$ that you can specify.
 
-The most complicated type is a coupled system of PDEs in four unknowns, $u$, $v$, $w$ and $q$:
+The most complicated type is a coupled system of PDEs in eight unknowns. As an illustration, for four unknowns, $u$, $v$, $w$ and $q$, the general system VisualPDE can solve is
 
 $$\begin{aligned}
 t_u\pd{u}{t} &= \vnabla \cdot(D_{uu}\vnabla u+D_{uv}\vnabla v+D_{uw}\vnabla w+D_{uq}\vnabla q) + f_u,\\
-\text{one of}\left\{\begin{matrix}\displaystyle t_v\pd{v}{t} \\ v\end{matrix}\right. & 
+\text{one of}\left\{\begin{matrix}\displaystyle t_v\pd{v}{t} \\ v\end{matrix}\right. &
 \begin{aligned}
     &= \vnabla \cdot(D_{vu}\vnabla u+D_{vv}\vnabla v+D_{vw}\vnabla w+D_{vq}\vnabla q) + f_v \vphantom{\displaystyle t_v\pd{v}{t}}, \\
     &= \vnabla \cdot(D_{vu}\vnabla u+D_{vw}\vnabla w+D_{vq}\vnabla q) + f_v,
 \end{aligned}\\
-\text{one of}\left\{\begin{matrix}\displaystyle t_w\pd{w}{t} \\ w\end{matrix}\right. & 
+\text{one of}\left\{\begin{matrix}\displaystyle t_w\pd{w}{t} \\ w\end{matrix}\right. &
 \begin{aligned}
     &= \vnabla \cdot(D_{wu}\vnabla u+D_{wv}\vnabla v+D_{ww}\vnabla w+D_{wq}\vnabla q) + f_w \vphantom{\displaystyle t_w\pd{w}{t}}, \\
     &= \vnabla \cdot(D_{wu}\vnabla u+D_{wv}\vnabla v+D_{wq}\vnabla q) + f_w,
 \end{aligned}\\
-\text{one of}\left\{\begin{matrix}\displaystyle t_q\pd{q}{t} \\ q\end{matrix}\right. & 
+\text{one of}\left\{\begin{matrix}\displaystyle t_q\pd{q}{t} \\ q\end{matrix}\right. &
 \begin{aligned}
     &= \vnabla \cdot(D_{qu}\vnabla u+D_{qv}\vnabla v+D_{qw}\vnabla w+D_{qq}\vnabla q) + f_q \vphantom{\displaystyle t_q\pd{q}{t}}, \\
     &= \vnabla \cdot(D_{qu}\vnabla u+D_{qv}\vnabla v+D_{qw}\vnabla w) + f_q,
@@ -77,9 +78,9 @@ t_u\pd{u}{t} &= \vnabla \cdot(D_{uu}\vnabla u+D_{uv}\vnabla v+D_{uw}\vnabla w+D_
 
 where $D_{uu}, \dots,  D_{qq}$, $f_u, \dots, f_q$ and $t_u, \dots, t_q$ are functions of $u$, $v$, $w$, $q$, $x$, $y$ and $t$ that you can specify.
 
-* You can change the number of unknowns by choosing <span class='click_sequence'>{{ layout.equations }} → **Advanced options** → **Num. species**</span>
-* In systems of multiple unknowns, you can include terms representing cross-diffusion (e.g. $D_{uv}$, $D_{vu}$) by toggling <span class='click_sequence'>{{ layout.equations }} → **Advanced options** → **Cross diffusion**</span>
-* In systems of multiple unknowns, you can choose between a differential or algebraic equation for some of the species (e.g. '$\partial w/\partial t=$' or '$w=$') by toggling <span class='click_sequence'>{{ layout.equations }} → **Advanced options** → **Algebraic w** (or **v** or **q**)</span>
+* You can change the number of unknowns by choosing <span class='click_sequence'>{{ layout.equations }} → **Equations** → **Variables** → **Number**</span>
+* In systems of multiple unknowns, you can include terms representing cross-diffusion (e.g. $D_{uv}$, $D_{vu}$) by toggling <span class='click_sequence'>{{ layout.equations }} → **Equations** → **Diffusion coefficients** →  **Cross diffusion**</span>
+* In systems of multiple unknowns, you can choose between a differential or algebraic equation for some of the variables (e.g. '$\partial w/\partial t=$' or '$w=$') by setting <span class='click_sequence'>{{ layout.equations }} → **Equations** → **Variables** → **No. algebraic**</span>
 
 ### More VisualPDE
 For a comprehensive list of all the options that you can set in VisualPDE, check out the [Advanced documentation](/user-guide/advanced-options), or discover what VisualPDE can solve in our brief [summary](/user-guide/what-can-visualpde-solve).

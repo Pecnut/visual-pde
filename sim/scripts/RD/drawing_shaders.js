@@ -15,6 +15,10 @@ export function drawShaderTop() {
     uniform float t;
     uniform float dx;
     uniform float dy;
+    uniform float globalIntegralValue1;
+    uniform float globalIntegralValue2;
+    uniform float globalIntegralValue3;
+    uniform float globalIntegralValue4;
 
     AUXILIARY_GLSL_FUNS
 
@@ -62,6 +66,31 @@ export function drawShaderTop() {
         float factor = 0.0;\n`;
 }
 
+// MRT counterpart of drawShaderTop(), used only once numGroups(numSpecies)>1. Brush
+// drawing only ever targets one species (one channel of one group) at a time, but since
+// the render target is mrtSimTextures (both groups' attachments at once), *both* outputs
+// must always be explicitly written - GLSL ES 300 doesn't guarantee an un-written
+// attachment retains its previous contents. So this always passes group 0's (fragColor0)
+// and group 1's (fragColor1) current state through unchanged; the Bot variants below then
+// override just the one drawn-on channel of whichever group it belongs to.
+export function drawShaderTopMRT() {
+  return drawShaderTop()
+    .replace(
+      "uniform sampler2D textureSource;",
+      `uniform sampler2D textureSource;
+    uniform sampler2D textureSourceGroup1;
+    layout(location = 0) out highp vec4 fragColor0;
+    layout(location = 1) out highp vec4 fragColor1;`,
+    )
+    .replace(
+      "gl_FragColor = uvwq;",
+      `vec4 uvwq2 = texture2D(textureSourceGroup1, textureCoords);
+        vec4 uvwq2Brush = texture2D(textureSourceGroup1, brushCoords);
+        fragColor0 = uvwq;
+        fragColor1 = uvwq2;`,
+    );
+}
+
 export function drawShaderShapeDisc() {
   return `distance = length(diff * vec2(L_x, L_y));\n`;
 }
@@ -105,6 +134,24 @@ export function drawShaderBotReplace() {
 
 export function drawShaderBotAdd() {
   return `gl_FragColor.COLOURSPEC = uvwq.COLOURSPEC + brushValueModifier * brushValue * factor;
+        }`;
+}
+
+// MRT counterparts of drawShaderBotReplace/Add(), used only once numGroups(numSpecies)>1.
+// FRAGCOLOR/UVWQGROUP are placeholders substituted by the caller (main.js) with
+// "fragColor0"/"uvwq" or "fragColor1"/"uvwq2" depending on which group options.whatToDraw
+// belongs to - the drawn-on channel is always in exactly one group, so only that group's
+// output needs the override (the other was already passed through unchanged by
+// drawShaderTopMRT).
+export function drawShaderBotReplaceMRT() {
+  return ` if (factor > 0.0) {
+              FRAGCOLOR.COLOURSPEC = brushValueModifier * brushValue * factor;
+          }
+        }`;
+}
+
+export function drawShaderBotAddMRT() {
+  return `FRAGCOLOR.COLOURSPEC = UVWQGROUP.COLOURSPEC + brushValueModifier * brushValue * factor;
         }`;
 }
 

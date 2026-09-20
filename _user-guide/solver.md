@@ -39,7 +39,7 @@ onSubmit="page_search(document.getElementById('pageSearchInput').value); return 
 
 ### The equations <a class="anchor" id='equations'>
 
-VisualPDE can solve a variety of PDE systems posed in 1D or 2D space, many of which are straightforward extensions of the two-species reaction–diffusion system,
+VisualPDE can solve a variety of PDE systems posed in 1D or 2D space, many of which are straightforward extensions of the two-variable reaction–diffusion system,
 
 $$
 \begin{aligned}
@@ -68,15 +68,15 @@ at a point $x$, where we've omitted any dependence of any quantities on anything
 
 ### Timestepping <a class="anchor" id='timestepping'>
 
-With space discretised as above, we are faced with a large system of coupled ordinary differential equations to solve, which represent the evolution of the unknowns at each discrete gridpoint of the spatial domain. VisualPDE implements four popular schemes for timestepping: [Forward Euler](https://en.wikipedia.org/wiki/Euler_method), two-step [Adams-Bashforth](https://en.wikipedia.org/wiki/Linear_multistep_method#Two-step_Adams–Bashforth), the [Midpoint Method](https://en.wikipedia.org/wiki/Midpoint_method) and the four-step [Runge-Kutta](https://en.wikipedia.org/wiki/Runge–Kutta_methods) method (commonly known as 'RK4'). These solvers each have their strengths, with Forward Euler being the least computationally demanding while RK4 offers superior accuracy and stability at the cost of doing more calculations each timestep. The following Forward Euler scheme is the default in many of the examples on the site:
+With space discretised as above, we are faced with a large system of coupled ordinary differential equations to solve, which represent the evolution of the unknowns at each discrete gridpoint of the spatial domain. VisualPDE implements four popular schemes for timestepping: [forward Euler](https://en.wikipedia.org/wiki/Euler_method), two-step [Adams–Bashforth](https://en.wikipedia.org/wiki/Linear_multistep_method#Two-step_Adams–Bashforth), the [midpoint method](https://en.wikipedia.org/wiki/Midpoint_method) and the four-step [Runge–Kutta](https://en.wikipedia.org/wiki/Runge–Kutta_methods) method (commonly known as 'RK4'). These solvers each have their strengths, with forward Euler being the least computationally demanding while RK4 offers superior accuracy and stability at the cost of doing more calculations each timestep. The following forward Euler scheme is the default in many of the examples on the site:
 
 $$ \pd{u}{t} \approx \frac{u(t+\dt) - u(t)}{\dt}$$
 
 for timestep $\dt$. This approach is far from state-of-the-art, but it is straightforward and intuitive to implement on massively parallel computing hardware (more on that [later](#browser)).
 
-In practice, its simplicity can lead to some problems, with [numerical instability](https://en.wikipedia.org/wiki/Euler_method#Numerical_stability) being perhaps the most pathological. Loosely speaking, the interaction between the forward Euler scheme and our spatial discretisation can lead to numerical artefacts ruining the solution, which typically occur when the ratio $D \, \dt / \dx^2$ is too small, where $D$ is any of the diffusion coefficients in the problem. Both the Midpoint Method and RK4 improve upon the stability of Forward Euler, whilst the Adams-Bashforth scheme is generally less stable but more accurate than Forward Euler.
+In practice, its simplicity can lead to some problems, with [numerical instability](https://en.wikipedia.org/wiki/Euler_method#Numerical_stability) being perhaps the most pathological. Loosely speaking, the interaction between the forward Euler scheme and our spatial discretisation can lead to numerical artefacts ruining the solution, which typically occur when the ratio $D \, \dt / \dx^2$ is too small, where $D$ is any of the diffusion coefficients in the problem. Both the midpoint method and RK4 improve upon the stability of forward Euler, whilst the Adams–Bashforth scheme is generally less stable but more accurate than forward Euler.
 
-VisualPDE will try to tell you when it's fallen foul of stability issues (we periodically check for 'NaN' or $\pm\infty$ in the solution), at which point you might want to try reducing $\dt$, trying out a different solver, reducing the diffusion coefficients in your problem, or increasing $\dx$ (we recommend trying each of these things in this order). If you want to experience this for yourself for Forward Euler, try clicking in [this](/sim/?preset=unstableHeatEquation) simulation. It turns out that only RK4 will make this simulation stable due to the relative size of the diffusion coefficient, timestep $\dt$ and spatial step $\dx$, which you can see for yourself by switching the timestepping scheme.
+VisualPDE will try to tell you when it's fallen foul of stability issues (we periodically check for 'NaN' or $\pm\infty$ in the solution), at which point you might want to try reducing $\dt$, trying out a different solver, reducing the diffusion coefficients in your problem, or increasing $\dx$ (we recommend trying each of these things in this order). If you want to experience this for yourself for forward Euler, try clicking in [this](/sim/?preset=unstableHeatEquation) simulation. It turns out that only RK4 will make this simulation stable due to the relative size of the diffusion coefficient, timestep $\dt$ and spatial step $\dx$, which you can see for yourself by switching the timestepping scheme.
 
 Despite each of our solvers having their limitations, these schemes have enabled VisualPDE to efficiently solve every system that we've thrown at it, though some tuning of the timestep can be necessary in extreme cases. If you have any tips for implementing alternative schemes (especially anything implicit), we'd love to hear from you!
 
@@ -102,7 +102,7 @@ in the [finite difference operator](#spatial-discretisation) described above.
 
 #### Robin
 
-Robin boundary conditions are a natural combination of Dirichlet and Neumann conditions, which we pose in the form of a generalised Neumann condition $\pd{u}{n}\onboundary = a(u,x,y,t)$, where the right-hand side can now depend on $u$ (and any other unknown in multi-species systems). These conditions are also implemented with ghost nodes. For example, enforcing $\pd{u}{n}\onboundary = u\onboundary$ at the leftmost $x$ boundary of a rectangular domain is achieved in practice by taking
+Robin boundary conditions are a natural combination of Dirichlet and Neumann conditions, which we pose in the form of a generalised Neumann condition $\pd{u}{n}\onboundary = a(u,x,y,t)$, where the right-hand side can now depend on $u$ (and any other unknown in multi-variable systems). These conditions are also implemented with ghost nodes. For example, enforcing $\pd{u}{n}\onboundary = u\onboundary$ at the leftmost $x$ boundary of a rectangular domain is achieved in practice by taking
 
 $$\textstyle u(x-\dx,y) = u(x+\dx,y) + 2 u(x,y)\,\dx$$
 

@@ -117,7 +117,9 @@ The configuration of a slider (value, start, step, stop) can be updated by modif
 
 ### Substitutions <a class="anchor" id='substitutions'>
 
-This menu contains named substitutions that can be reused throughout VisualPDE. Unlike **Parameters**, which hold a single number, substitutions are pieces of syntax that get substituted wherever their name is used, and so can depend on space, time, or any of the unknowns, not just on constants and other parameters. New substitutions can be defined using the empty input field at the bottom of the list, exactly as with Parameters, and substitutions can depend on one another (but not cyclically).
+This menu contains named substitutions that can be reused throughout VisualPDE. Unlike **Parameters**, which hold a single number, substitutions are pieces of syntax that get substituted wherever their name is used, and so can depend on space, time, or any of the unknowns, not just on constants and other parameters. 
+
+New substitutions can be defined using the empty input field at the bottom of the list, exactly as with **Parameters**, and substitutions can depend on one another (but not cyclically).
 
 The basic syntax for defining a substitution is
 
@@ -125,9 +127,9 @@ The basic syntax for defining a substitution is
 name = substitution
 ```
 
-which makes `name` available as shorthand for `substitution` everywhere in VisualPDE: wherever `name` appears in another field, it is substituted for (a parenthesised copy of) `substitution` when the simulation is built. Because what a substitution evaluates to can vary in space and time, changing one triggers a full rebuild of the simulation, rather than the instant update you get from changing a **Parameter**. Substitutions cannot share a name with a Parameter, a variable, or a reaction term, and (unlike Parameters) never have sliders.
+which makes `name` available as shorthand for `substitution` everywhere in VisualPDE: wherever `name` appears in another field, it is substituted for (a parenthesised copy of) `substitution` when the simulation is built. Substitutions cannot share a name with a Parameter, a variable, or a reaction term, and (unlike Parameters) never have sliders.
 
-Substitutions are shown as their own rows in the typeset equation display (see **Typeset**), rather than being substituted into the main system of equations, so that the equations remain readable.
+Substitutions are shown as their own rows in the typeset equation display (see **Typeset**), rather than being substituted into the main system of equations, so that the equations remain readable. You can even hide individual substitutions from the typeset display with the `Show` button.
 
 ### Boundary conditions <a class="anchor" id='boundary-conditions'>
 

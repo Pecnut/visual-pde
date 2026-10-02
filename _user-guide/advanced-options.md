@@ -39,7 +39,7 @@ onSubmit="page_search(document.getElementById('pageSearchInput').value); return 
 
 ## Equations {{ layout.equations }} <a class="anchor" id='equations'>
 
-VisualPDE is all about solving equations. In the Equations pane, you can view and define the problem that VisualPDE will solve for you in your browser, complete with initial and boundary conditions, and configure the number and names of the variables used throughout the interface (see [**Variables**](#variables), below). More advanced settings, such as user-defined parameters and expressions, can be found under [**Parameters and notation**](#parameters).
+VisualPDE is all about solving equations. In the Equations pane, you can view and define the problem that VisualPDE will solve for you in your browser, complete with initial and boundary conditions, and configure the number and names of the variables used throughout the interface (see [**Variables**](#variables), below). The pane also contains user-defined [**Parameters**](#parameters) and [**Substitutions**](#substitutions), described below.
 
 ### Equations <a class="anchor" id='edit'>
 
@@ -73,9 +73,9 @@ Customise all the terms in the PDEs that you would like to solve using natural s
 
   Define the inhomogeneities in the equations. These can be functions of space ($x$, $y$), time ($t$), any of the unknowns ($u$, $v$, $w$, ...), the size of the domain ($L$, $L_x$, $L_y$), the images ($I_S$, $I_T$), and any quantities defined in **Parameters**. See our discussion of [valid expressions](#writing-valid-expressions) for valid syntax and a list of available in-built functions.
 
-  Advanced users can also make careful use of `RAND`, a uniformly random value in $[0,1]$, and `RANDN`, a normally distributed random number with unit variance and zero mean. This converts the equations into [stochastic partial differential equations](https://en.wikipedia.org/wiki/Stochastic_partial_differential_equation), which should only be solved using the Forward Euler timestepping scheme. Both `RAND` and `RANDN` require manually dividing by `sqrt(dt)` in non-algebraic equations so that the scheme resembles the [Euler–Maruyama method](https://en.wikipedia.org/wiki/Euler–Maruyama_method). The solution under other timestepping schemes is undefined.
+  Advanced users can also make careful use of `RAND`, a uniformly random field in $[0,1]$, and `RANDN`, a normally distributed random field with unit variance and zero mean. By 'field' we mean that random numbers are sampled identically and independently for every point on the grid. This converts equations into a type of random partial differential equations. As a health warning, the numerical schemes implemented may not in general preserve mathematical properties, such as measurability of solutions in the limit $\dt \to 0$.  
 
-  For convenience, we define `WhiteNoise` to be a normally distributed random variable with unit variance and zero mean, scaled by $1/\sqrt{\dt\dx^N}$ where $N=1,2$ is the spatial dimension. This scales appropriately with timestep and spatial step and is suitable for direct use in PDEs, such as in our [stochastic example](/nonlinear-physics/stochastic-pdes). You can use up to 4 independent WhiteNoise terms using the syntax `WhiteNoise_1`, `WhiteNoise_2`, `WhiteNoise_3` and `WhiteNoise_4`.
+  Both `RAND` and `RANDN` directly generate random numbers, independent of $\dt$, so would need to be scaled appropriately to simulate white noise forcing to simulate true [stochastic partial differential equations](https://en.wikipedia.org/wiki/Stochastic_partial_differential_equation).  For convenience, we define `WhiteNoise` to be a normally distributed random variable with unit variance and zero mean, scaled by $1/\sqrt{\dt\dx^N}$ where $N=1,2$ is the spatial dimension. This scales appropriately with timestep and spatial step and is suitable for direct use in PDEs, such as in our [stochastic example](/nonlinear-physics/stochastic-pdes). You can use up to 4 independent WhiteNoise terms using the syntax `WhiteNoise_1`, `WhiteNoise_2`, `WhiteNoise_3` and `WhiteNoise_4`. Importantly, these scalings are only valid using the Forward Euler time stepping scheme.
 
 - #### Timescales <a class="anchor" id='timescales'>
 
@@ -129,7 +129,7 @@ name = substitution
 
 which makes `name` available as shorthand for `substitution` everywhere in VisualPDE: wherever `name` appears in another field, it is substituted for (a parenthesised copy of) `substitution` when the simulation is built. Substitutions cannot share a name with a Parameter, a variable, or a reaction term, and (unlike Parameters) never have sliders.
 
-Substitutions are shown as their own rows in the typeset equation display (see **Typeset**), rather than being substituted into the main system of equations, so that the equations remain readable. You can even hide individual substitutions from the typeset display with the `Show` button.
+Substitutions are shown as their own rows in the typeset equation display, rather than being substituted into the main system of equations, so that the equations remain readable. You can even hide individual substitutions from the typeset display with the `Show` button.
 
 ### Boundary conditions <a class="anchor" id='boundary-conditions'>
 

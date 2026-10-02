@@ -2418,9 +2418,9 @@ async function VisualPDE(url) {
     addInfoButton(root, "/user-guide/advanced-options#edit");
     addFocusLeftGUIButton(editEquationsFolder);
 
-    // Species-count/naming controllers get their own sub-folder too, back directly under
-    // "Equations" as a sibling of Timescales/Diffusion coefficients/Reaction terms (not nested
-    // inside "Parameters and notation" - Parameters/Expressions live there instead).
+    // Species-count/naming controllers get their own sub-folder, directly under "Equations" as
+    // a sibling of Diffusion coefficients/Forcing terms/Timescales. Parameters and Substitutions
+    // are separate top-level folders in the left GUI.
     root = editEquationsFolder;
     variablesFolder = editEquationsFolder.addFolder("Variables");
     addInfoButton(variablesFolder, "/user-guide/advanced-options#variables");
@@ -5739,9 +5739,8 @@ async function VisualPDE(url) {
     }
 
     // Iff the user has entered u_x, u_y etc in a diffusion coefficient, it will be present in
-    // the update shader as uvwxy[XY].[rgba] (group 0) or uvwq2[XY].[rgba] (group 1, species
-    // 5-8 - there's no uvwq2X/uvwq2XX declared anywhere, so this must be caught here rather
-    // than left to fail as an undeclared-variable shader compile error).
+    // the update shader as uvwq[XY].[rgba] (group 0) or uvwq2[XY].[rgba] (group 1, species
+    // 5-8).
     // If they've done this, warn them and don't update the shader.
     let match = diffusionShader.match(/\buvwq2?[XY]\.[rgba]\b/);
     if (match) {
@@ -5889,6 +5888,8 @@ async function VisualPDE(url) {
         clampShaderGroup1,
         RDShaderAdvectionPreBC(),
         RDShaderDiffusionPreBC(),
+        groupifyShaderStr(RDShaderAdvectionPreBC(), 1),
+        groupifyShaderStr(RDShaderDiffusionPreBC(), 1),
         neumannShader,
         bcGroup1.neumannShader,
         ghostShader,
@@ -5897,6 +5898,8 @@ async function VisualPDE(url) {
         bcGroup1.robinShader,
         RDShaderAdvectionPostBC(),
         RDShaderDiffusionPostBC(),
+        groupifyShaderStr(RDShaderAdvectionPostBC(), 1),
+        groupifyShaderStr(RDShaderDiffusionPostBC(), 1),
         parseReactionStrings(),
         diffusionShaderMRT,
       ].join(" ");
@@ -6497,22 +6500,24 @@ async function VisualPDE(url) {
   }
 
   // Rewrites group-0's hardcoded stencil/output variable names (uvwq, uvwqL/R/T/B/LL/RR/
-  // TT/BB, updated, RHS, timescales) to their group-1 counterparts (uvwq2, uvwq2L/R/T/B/
-  // LL/RR/TT/BB, updated2, RHS2, timescalesGroup1 - see RDShaderTopMRT/RDShaderMainMRT in
-  // simulation_shaders.js, which declare exactly these group-1 locals). A no-op for group
+  // TT/BB, uvwqX/Y/XF/.../XX/YY derivatives, updated, RHS, timescales) to their group-1
+  // counterparts (uvwq2, uvwq2L/R/T/B/LL/RR/TT/BB, uvwq2X/..., updated2, RHS2,
+  // timescalesGroup1 - see RDShaderTopMRT/RDShaderMainMRT in simulation_shaders.js, which
+  // declare the group-1 stencil locals; the derivative locals are declared by groupified
+  // copies of RDShaderAdvectionPreBC/RDShaderDiffusionPreBC in middleMRT). A no-op for group
   // 0. Used by selectSpeciesInShaderStr (for BC/algebraic-species templates) and directly
   // for clampSpeciesToEdgeShader's output (which doesn't go through selectSpeciesInShaderStr
   // - it does its own SPECIES substitution).
   function groupifyShaderStr(shaderStr, group) {
     if (group === 0) return shaderStr;
     return shaderStr.replaceAll(
-      /\buvwqLL\b|\buvwqRR\b|\buvwqTT\b|\buvwqBB\b|\buvwqL\b|\buvwqR\b|\buvwqT\b|\buvwqB\b|\buvwq\b|\bupdated\b|\bRHS\b|\btimescales\b/g,
+      /\buvwqLL\b|\buvwqRR\b|\buvwqTT\b|\buvwqBB\b|\buvwqL\b|\buvwqR\b|\buvwqT\b|\buvwqB\b|\buvwq(?:[XY](?:[FB](?:[XY][FB])?)?|XX|YY)\b|\buvwq\b|\bupdated\b|\bRHS\b|\btimescales\b/g,
       function (m) {
         if (m === "uvwq") return "uvwq2";
         if (m === "updated") return "updated2";
         if (m === "RHS") return "RHS2";
         if (m === "timescales") return "timescalesGroup1";
-        // uvwqL/R/T/B/LL/RR/TT/BB: insert "2" right after "uvwq".
+        // uvwqL/R/T/B/LL/RR/TT/BB and derivatives: insert "2" right after "uvwq".
         return "uvwq2" + m.slice(4);
       },
     );

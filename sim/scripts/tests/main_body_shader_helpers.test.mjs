@@ -8,6 +8,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as m from "./generated/main-body.mjs";
+import {
+  RDShaderAdvectionPreBC,
+  RDShaderAdvectionPostBC,
+  RDShaderDiffusionPreBC,
+  RDShaderDiffusionPostBC,
+} from "../RD/simulation_shaders.js";
 
 function stubThrowError() {
   m.__setState({ throwError: () => {} });
@@ -30,6 +36,31 @@ test("groupifyShaderStr: a no-op for group 0, retargets the uvwq-family/updated/
     m.groupifyShaderStr(str, 1),
     "uvwq2L.r + updated2 + RHS2 + timescalesGroup1",
   );
+});
+
+test("groupifyShaderStr: retargets derivative locals (uvwqX/XF/XFXF/XX/...) to group 1, so the groupified derivative blocks declare every derivative a species 5-8 reaction term can reference (regression: e.g. C_x for species 5 compiled to an undeclared uvwq2X)", () => {
+  const derivs = ["X", "Y", "XF", "YF", "XB", "YB", "XFXF", "YFYF", "XBXB", "YBYB", "XX", "YY"];
+  const pre = m.groupifyShaderStr(RDShaderAdvectionPreBC() + RDShaderDiffusionPreBC(), 1);
+  const post = m.groupifyShaderStr(RDShaderAdvectionPostBC() + RDShaderDiffusionPostBC(), 1);
+  for (const d of derivs) {
+    assert.match(pre, new RegExp("\\bvec4 uvwq2" + d + " ="), d);
+    assert.match(post, new RegExp("^\\s*uvwq2" + d + " =", "m"), d);
+  }
+  // No group-0 stencil/derivative token survives groupification.
+  assert.doesNotMatch(pre + post, /\buvwq(?!2)\w*/);
+
+  // Every derivative form the reaction parser can emit for a species 5-8 is one of these.
+  m.__setState({
+    options: { minX: "0", minY: "0", dimension: 2, numSpecies: 8 },
+    listOfSpecies: ["a", "b", "c", "d", "e", "f", "g", "h"],
+    expandedExpressionDefs: {},
+  });
+  stubThrowError();
+  m.genAnySpeciesRegexStrs();
+  const parsed = m.parseShaderString("e_x + e_yb + e_xf2 + e_yb2 + e_xx + e_yy");
+  const refs = [...parsed.matchAll(/\buvwq2([A-Z]+)\./g)].map((r) => r[1]);
+  assert.deepEqual(refs.sort(), ["X", "XX", "XFXF", "YB", "YBYB", "YY"].sort());
+  for (const d of refs) assert.match(pre, new RegExp("\\bvec4 uvwq2" + d + " ="));
 });
 
 test("selectSpeciesInShaderStr: substitutes SPECIES/robinRHSSPECIES/dirichletRHSSPECIES for the given species, and groupifies for species 5-8", () => {

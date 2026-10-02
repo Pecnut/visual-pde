@@ -3,7 +3,7 @@
 ## Sharing and citing
 
 ### How do I cite VisualPDE in my article?
-The VisualPDE paper is out! You can find it [online](https://doi.org/10.1007/s11538-023-01218-4) for free and cite it as 
+The VisualPDE paper is out! You can find it [online](https://doi.org/10.1007/s11538-023-01218-4) for free and cite it as
 
 Walker, B.J., Townsend, A.K., Chudasama, A.K. et al. VisualPDE: Rapid interactive simulations of partial differential equations. Bulletin of Mathematical Biology 85, 113 (2023).
 
@@ -16,7 +16,7 @@ VisualPDE is designed for sharing. Whether you've fallen in love with one of our
 These links used to be quite long, but now we try to give you a shortened link that works a bit like [tinyURL.com](https://tinyurl.com/app). If you see the 'mini' tag appear next to 'Copy link', you're going to get one of our mini links! Perfect for sharing!
 
 ### How do I take a pretty screenshot or video without all the user interface showing up?
-Screenshots and videos are simple in VisualPDE. Simply open the share sheet by clicking Share (📤) and click 'Save image' to download a screenshot to your device, or 'Record clip' to begin a recording that will download to your device when done (we recommend Chrome or Firefox for this). Recordings can be up to 60s long and will stop before then if you pause the simulation or click {{ layout.stop_recording }}
+Screenshots and videos are simple in VisualPDE. Simply open the share sheet by clicking Share (📤) and click 'Save image' to download a screenshot to your device, or 'Record clip' to begin a recording that will download to your device when done (we recommend Chrome or Firefox for this). Recordings can be up to 60s long and will stop before then if you pause the simulation or click Stop recording
 
 ### How do I make my videos compatible with social media and messaging apps?
 Different services accept different types of video, so compatibility is hard. Even worse, different browsers can only create certain types of video, so universal video compatibility is essentially impossible for us at VisualPDE. Fortunately, there are simple ways to convert video so that it is compatible with your favourite services.
@@ -29,8 +29,6 @@ If you prefer a command line solution, then [``ffmpeg``](https://www.ffmpeg.org)
 Yes you can! Clicking Share (📤) and then 'Embed' will put an [iframe](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/iframe) element on your clipboard that points to the current simulation. You can specify the complexity of the user interface that you want to be visible, selecting from the full experience, the minimal interface used in our [Visual Stories](/visual-stories), or no user interface at all. If you do this, we'd love to hear from you at [hello@visualpde.com](mailto:hello@visualpde.com) so we can check out your site and your simulation!
 
 In principle, you can have as many embedded simulations on your site as you want. In practice, having lots of simulations running at once might cause stuttering on some devices. You can mitigate this by pausing simulations (VisualPDE consumes very few resources when paused) or by only showing a limited number of simulations onscreen at any one time (simulations that are out of view are automatically paused by your browser). You can also make your simulations less computationally demanding by reducing the number of timesteps per frame or the domain size.
-
----
 
 ## Errors
 Sometimes, mistakes happen. If something has gone wrong, VisualPDE will try its best to describe the error in a helpful way via a pop-up. We try to display a helpful error message to help you identify the problem. More cryptic messages are listed below.
@@ -47,7 +45,7 @@ Here, the quantity 'k' has been used somewhere in one of the many free-text inpu
 Check the equations, or try reducing the timestep, and restart the simulation
 ```
 
-The default timestep size (`$\Delta t = 0.1$`) is often too large, try reducing it by an order of magnitude. Alternatively, change the numerical solver.
+The default timestep ($\Delta t = 0.1$) is often too large; try reducing it by an order of magnitude. Alternatively, change the timestepping scheme. See the [solver documentation](/user-guide/solver#timestepping) for more details.
 
 ### Cyclic variables/parameters detected
 ```
@@ -63,20 +61,18 @@ There is no solution to this system of equations, so check your definitions and 
 ### My error looks nothing like any of these
 Sometimes, errors won't look anything like these examples. If this is the case and the error message doesn't help you in resolving it, please follows the steps outlined [below](#error) and help make VisualPDE as stable as possible!
 
-NOTE: VisualPDE sometimes won't warn you about multiple errors that involve the same error message (we're working on it). So, if you fix an error involving 'k', you might not be warned about later errors involving 'k' in the same session. Reloading the page (making sure to have copied your configuration URL first!) is a good way of getting around this for now.
+Note: VisualPDE sometimes won't warn you about multiple errors that involve the same error message (we're working on it). So, if you fix an error involving 'k', you might not be warned about later errors involving 'k' in the same session. Reloading the page (making sure to have copied your configuration URL first!) is a good way of getting around this for now.
 
 ### The buttons don't work, but I want to keep playing!
-Very rarely, the simulation and the user interface may become unresponsive. If this happens: 
+Very rarely, the simulation and the user interface may become unresponsive. If this happens:
 1. Click Help (❓) to bring up the documentation to try to solve your problem.
-2. Reload the page. Sadly, this won't preserve the configuration beyond that specified in the URL.
-If the issue is persistent and you're confident that you've followed all the steps outlined in this guide, please report your issue as described [below](#error). 
+1. Reload the page. Sadly, this won't preserve the configuration beyond that specified in the URL.
+If the issue is persistent and you're confident that you've followed all the steps outlined in this guide, please report your issue as described [below](#error).
 
 ### How do I report an issue?
 Sometimes, something might go wrong (e.g. a part of the user interface is doing something strange, or the simulations are not working on your device). If you encounter an issue that can't be resolved using the [documentation](/user-guide), we'd love to hear from you at [bugs@visualpde.com](mailto:bugs@visualpde.com).
 
-If you can, it will help us a lot if you could click <span class='click_sequence'>Settings (🔧) → **Misc.** → **Debug** → **Copy debug**</span> and paste the contents into your email. This will contain information about your current configuration that will help us resolve the problem.
-
----
+If you can, it will help us a lot if you could click <span class='click_sequence'>Settings (🔧) → **More...** → **Developer tools** → **Copy debug**</span> and paste the contents into your email. This will contain information about your current configuration that will help us resolve the problem.
 
 ## Beyond VisualPDE.com
 
@@ -87,7 +83,7 @@ For instance, a popular way to create custom teaching materials is to simply inc
 
 If you want to do more than this allows, we'd love to hear from you at [hello@visualpde.com](mailto:hello@visualpde.com) so that we can help bring VisualPDE into your teaching, research, or outreach activities.
 
-### I want to use VisualPDE for my business - can I?
+### I want to use VisualPDE for my business – can I?
 Almost certainly! However, we want to make sure that we do knowledge exchange properly, so do get in touch with us at [hello@visualpde.com](mailto:hello@visualpde.com) so that we can make sure you'll get the best out of VisualPDE.
 
 ### I've got a feature request – who do I contact?

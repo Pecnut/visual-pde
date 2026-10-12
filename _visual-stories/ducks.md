@@ -18,7 +18,7 @@ In this Visual Story, we'll discuss the mathematics behind ocean modelling and p
 
 We'll model the ducks as 'tracer particles' in the ocean. The term 'tracer particles' refers to small objects that move with a fluid without really changing how it behaves. They are very common: examples include leaves on the surface of a river and, fortunately, rubber ducks in the ocean. Our simulations will try to track the amount of these particles in different parts of the ocean.
 
-<video autoplay loop playsinline muted disableRemotePlayback width="80%" style="display:block;margin:0 auto;"><source src='../assets/ani/ocean_flow.mp4' type='video/mp4'><p>Magnitude of east-west flow in the world's oceans.</p></video><br>
+<video autoplay loop playsinline muted disableRemotePlayback width="80%" style="display:block;margin:0 auto;"><source src='/assets/ani/ocean_flow.mp4' type='video/mp4'><p>Magnitude of east-west flow in the world's oceans.</p></video><br>
 
 To do this, we'll need to know how water moves around in the ocean. Determining the fluid flow, however, is a difficult and time-consuming process that requires running large numerical simulations and cutting-edge science. We'll cheat and use existing simulations from [NASA](https://podaac.jpl.nasa.gov)[^1], which take into account factors including the Earth's rotation, the temperature of the water, and the phase of the moon (really). The video above shows the east–west flow velocity for 2023 from one of these simulations (eastward in red, westward in blue).
 

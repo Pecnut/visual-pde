@@ -64,14 +64,11 @@
         [...document.getElementsByClassName('sim')].forEach(el => {
           if (!el.src) return;
           const url = new URL(el.src);
-          if (/[?&]/.test(url.search)) {
-            const params = new URLSearchParams(url.search);
-            // If there's an sf specified, do not modify.
-            if (!params.has("sf")) {
-              el.src += "&sf=0.5";
-            }
-          } else {
-            el.src += "?sf=0.5";
+          // If there's an sf specified, do not modify. Edit the query via the URL rather than
+          // appending to src, which would otherwise end up in any #options=... of the link.
+          if (!url.searchParams.has("sf")) {
+            url.searchParams.set("sf", "0.5");
+            el.src = url.toString();
           }
         })
       });
@@ -102,7 +99,5 @@
       });
     });
   </script>		
-
-  <script src="/sim/scripts/register_sw.js" async></script>
 
 </head>

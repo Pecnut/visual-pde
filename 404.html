@@ -3,6 +3,17 @@ permalink: /404.html
 layout: default
 ---
 
+<script>
+  // Pages are built as /path/name/index.html, so /path/name.html doesn't exist.
+  // Redirect /path/name.html (or /path/name/index.html) to /path/name/, keeping any query or hash.
+  (function () {
+    var match = location.pathname.match(/^(.+?)(?:\/index)?\.html$/);
+    if (match) {
+      location.replace(match[1] + "/" + location.search + location.hash);
+    }
+  })();
+</script>
+
 <style type="text/css" media="screen">
   .container {
     margin: 10px auto;

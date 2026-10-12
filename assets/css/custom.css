@@ -1461,7 +1461,7 @@ vpde-chart {
     Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
 }
 
-.darkmode-button .svg-inline--fa {
+.darkmode-button :is(.fa-solid, .fa-regular) {
   margin-right: 5px;
   vertical-align: -0.15em;
 }

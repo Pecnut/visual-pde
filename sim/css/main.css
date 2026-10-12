@@ -1547,7 +1547,7 @@ a#add_view {
   background-color: var(--background-color);
 }
 
-.btn-primary .svg-inline--fa {
+.btn-primary :is(.fa-solid, .fa-regular) {
   margin-right: 5px;
 }
 
@@ -1814,11 +1814,6 @@ p.error_para {
   user-select: auto;
 }
 
-i.icon_on_text_button {
-  color: #606060;
-  margin-right: 0.4rem;
-}
-
 .fading_in {
   opacity: 100% !important;
   transition-duration: 2s;
@@ -2051,14 +2046,8 @@ select {
   padding-right: 0.4rem;
 }
 
-.button_list a .svg-inline--fa,
-.button_list button .svg-inline--fa {
-  margin-right: 5px;
-  color: var(--button-inline-icon-color);
-}
-
-.button_list i {
-  font-size: 1.1rem;
+.button_list a :is(.fa-solid, .fa-regular),
+.button_list button :is(.fa-solid, .fa-regular) {
   margin-right: 5px;
   color: var(--button-inline-icon-color);
 }
@@ -2473,7 +2462,7 @@ div.cite_paper > a {
   border: none;
 }
 
-.darkmode-button .svg-inline--fa {
+.darkmode-button :is(.fa-solid, .fa-regular) {
   margin-right: 5px;
   padding-bottom: 1px;
 }

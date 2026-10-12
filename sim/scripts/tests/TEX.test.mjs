@@ -153,3 +153,43 @@ test("substituteGreek: epsilon becomes 'varepsilon' first, then gets backslash-p
 test("substituteGreek: subscripted Greek names are still matched (e.g. alpha_1)", () => {
   assert.equal(substituteGreek("alpha_1"), "\\alpha_1");
 });
+
+test("substituteGreek: Greek after an underscore is backslash-prefixed and the subscript wrapped in {}", () => {
+  assert.equal(substituteGreek("D_alpha"), "D_{\\alpha}");
+  assert.equal(substituteGreek("u_beta + v_gamma"), "u_{\\beta} + v_{\\gamma}");
+  assert.equal(substituteGreek("a_theta*b_eta"), "a_{\\theta}*b_{\\eta}");
+  assert.equal(substituteGreek("D_alpha(u)"), "D_{\\alpha}(u)");
+  assert.equal(substituteGreek("u_tau^2"), "u_{\\tau}^2");
+  assert.equal(substituteGreek("T_Alpha"), "T_{\\Alpha}"); // case-insensitive, as for bare Greek
+  assert.equal(substituteGreek("_omega"), "_{\\omega}");
+});
+
+test("substituteGreek: the rest of the subscripted word is wrapped too, including nested subscripts and more Greek", () => {
+  assert.equal(substituteGreek("k_alpha1"), "k_{\\alpha1}");
+  assert.equal(substituteGreek("x_mu2b"), "x_{\\mu2b}");
+  assert.equal(substituteGreek("u_alpha_1"), "u_{\\alpha_{1}}");
+  assert.equal(substituteGreek("f_pi_max"), "f_{\\pi_{max}}");
+  assert.equal(substituteGreek("u_alpha_beta"), "u_{\\alpha_{\\beta}}");
+  assert.equal(substituteGreek("s_phi_epsilon_2"), "s_{\\phi_{\\varepsilon_{2}}}");
+  // Greek after a later underscore in the subscript.
+  assert.equal(substituteGreek("u_ab_alpha"), "u_{ab_{\\alpha}}");
+});
+
+test("substituteGreek: epsilon after an underscore becomes varepsilon, and varepsilon is not doubled", () => {
+  assert.equal(substituteGreek("x_epsilon"), "x_{\\varepsilon}");
+  assert.equal(substituteGreek("x_varepsilon"), "x_{\\varepsilon}");
+  assert.equal(substituteGreek("beta_epsilon"), "\\beta_{\\varepsilon}");
+});
+
+test("substituteGreek: bare and underscored Greek mix without double-substitution", () => {
+  assert.equal(substituteGreek("alpha_beta"), "\\alpha_{\\beta}");
+  assert.equal(substituteGreek("alpha + D_alpha"), "\\alpha + D_{\\alpha}");
+  assert.equal(substituteGreek("epsilon_1"), "\\varepsilon_1");
+});
+
+test("substituteGreek: underscored words that only start with a Greek name, or have no Greek, are left alone", () => {
+  assert.equal(substituteGreek("x_nuclear"), "x_nuclear"); // not x_{\nuclear}
+  assert.equal(substituteGreek("u_pix"), "u_pix");
+  assert.equal(substituteGreek("x_1alpha"), "x_1alpha");
+  assert.equal(substituteGreek("u_ab + v_12"), "u_ab + v_12");
+});

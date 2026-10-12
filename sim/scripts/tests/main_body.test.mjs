@@ -471,6 +471,20 @@ test("parseStringToTEX: doesn't infinitely recurse when str has no Int(...) at a
   assert.equal(m.parseStringToTEX("a - b"), "a - b");
 });
 
+test("parseStringToTEX: Greek subscripts (e.g. D_alpha) typeset as a single braced subscript", () => {
+  m.__setState({
+    options: { minX: "0", minY: "0", dimension: "2" },
+    listOfSpecies: ["u", "v"],
+    listOfReactions: ["UFUN", "VFUN"],
+  });
+  stubThrowError();
+  assert.equal(m.parseStringToTEX("D_alpha*u"), "D_{\\alpha} u");
+  assert.equal(m.parseStringToTEX("k_alpha1*u"), "k_{\\alpha_{1}} u");
+  assert.equal(m.parseStringToTEX("u_ab_alpha + D_1"), "u_{ab_{\\alpha}} + D_{1}");
+  assert.equal(m.parseStringToTEX("beta_epsilon^2"), "{\\beta_{\\varepsilon}}^{2}");
+  assert.equal(m.parseStringToTEX("x_nuclear + y_12"), "x_{nuclear} + y_{12}");
+});
+
 // --- migrateGlobalIntSyntax ---------------------------------------------------
 
 test("migrateGlobalIntSyntax: is a no-op when there's no old globalIntegralFun field", () => {
@@ -683,6 +697,31 @@ test("autoCorrectSyntax: scientific notation survives the digit rule", () => {
   assert.equal(m.autoCorrectSyntax("1e5"), "1e5");
   assert.equal(m.autoCorrectSyntax("2e-3"), "2e-3");
   assert.equal(m.autoCorrectSyntax("1E5"), "1e5");
+});
+
+test("autoCorrectSyntax: two single-character species written together gain a *", () => {
+  m.__setState({ listOfSpecies: ["u", "v"], options: { kineticParams: "", expressions: "" } });
+  m.genAnySpeciesRegexStrs();
+  assert.equal(m.autoCorrectSyntax("uv"), "u*v");
+  assert.equal(m.autoCorrectSyntax("a - vu^2"), "a - v*u^2");
+  assert.equal(m.autoCorrectSyntax("uu"), "u*u");
+  assert.equal(m.autoCorrectSyntax("xy + yx"), "x*y + y*x");
+  // Only whole two-letter words are split, never substrings of longer names.
+  assert.equal(m.autoCorrectSyntax("uva + uv_1"), "uva + uv_1");
+});
+
+test("autoCorrectSyntax: a declared name spelt like a product of species is left alone", () => {
+  m.__setState({
+    listOfSpecies: ["u", "v"],
+    options: { kineticParams: "vu = 2;xy = 1;", expressions: "uv = u*v;" },
+  });
+  m.genAnySpeciesRegexStrs();
+  assert.equal(m.autoCorrectSyntax("uv"), "uv");
+  assert.equal(m.autoCorrectSyntax("a - uv + vu"), "a - uv + vu");
+  assert.equal(m.autoCorrectSyntax("2uv"), "2*uv");
+  assert.equal(m.autoCorrectSyntax("xy + yx"), "xy + y*x");
+  // Undeclared pairs are still split.
+  assert.equal(m.autoCorrectSyntax("uu + vv"), "u*u + v*v");
 });
 
 // --- autoCorrectDefinition ----------------------------------------------------------------

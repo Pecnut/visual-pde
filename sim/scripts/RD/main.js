@@ -110,8 +110,7 @@ import { OrbitControls } from "../OrbitControls.js";
 import { Line2 } from "../lines/Line2.js";
 import { LineMaterial } from "../lines/LineMaterial.js";
 import { LineGeometry } from "../lines/LineGeometry.js";
-import { minifyPreset, maxifyPreset } from "./minify_preset.js";
-import { LZString } from "../lz-string.min.js";
+import { encodeOptions, decodeOptions } from "./url_codec.js";
 import {
   equationTEXFun,
   buildEquationTEX,
@@ -318,7 +317,10 @@ async function VisualPDE(url) {
     // rebuilt by refreshExpressionExpansions() (called at the top of updateShaders()) and
     // consumed by parseShaderString(). See the "Expressions" feature (main.js, search for
     // refreshExpressionExpansions) for the substitution design.
-    expandedExpressionDefs = {};
+    expandedExpressionDefs = {},
+    // The options.expressions string that expandedExpressionDefs was last built from - see
+    // ensureExpressionExpansionsCurrent().
+    expandedExpressionDefsSource = null;
   const llmURL =
     "https://gemini.google.com/gem/1mJ4572e1TJwEHcaYDst0_9keZkx78-zn";
   const defaultPreset = "GrayScott";
@@ -556,9 +558,21 @@ async function VisualPDE(url) {
 
   // Check URL for any specified options.
   // Take the URL stored as a string in url (if it exists) and get the search parameters
-  // from it. If it doesn't exist, use the current URL.
+  // from it. If it doesn't exist, use the current URL. Links store the simulation in the
+  // hash (#options=...), which is never sent to the server and so isn't subject to its
+  // limits on the length of URLs, so parameters in the hash are merged in on top of those in
+  // the query string.
+  const href = url ?? window.location.href;
+  const hashStart = href.includes("#") ? href.indexOf("#") : href.length;
+  const queryStart = href.slice(0, hashStart).indexOf("?");
   const params = new URLSearchParams(
-    (url ? url.split("?")[1] : window.location.search).replaceAll("&amp;", "&"),
+    (queryStart < 0 ? "" : href.slice(queryStart + 1, hashStart)).replaceAll(
+      "&amp;",
+      "&",
+    ),
+  );
+  new URLSearchParams(href.slice(hashStart + 1)).forEach((value, key) =>
+    params.set(key, value),
   );
 
   if (params.has("iframeID")) {
@@ -637,18 +651,12 @@ async function VisualPDE(url) {
     // If options have been provided, apply them on top of loaded options.
     window.gtag?.("event", "custom_link_followed");
     try {
-      var newParams = JSON.parse(
-        LZString.decompressFromEncodedURIComponent(params.get("options")),
-      );
+      var newParams = decodeOptions(params.get("options"));
     } catch (e) {
       throwError(
         "It looks like this link is missing something - please check that it has been copied and pasted correctly and try again.",
       );
       newParams = {};
-    }
-    if (newParams.hasOwnProperty("p")) {
-      // This has been minified, so maxify before loading.
-      newParams = maxifyPreset(newParams);
     }
     loadPreset(newParams);
     shouldLoadDefault = false;
@@ -675,7 +683,10 @@ async function VisualPDE(url) {
   // If there is an options object in sessionStorage, load it, so long as we're not changing simulation via the URL. This allows a simulation to persist across page reloads.
   const sessionOptions = sessionStorage.getItem("options");
   const oldQueryString = sessionStorage.getItem("oldQueryString");
-  if (sessionOptions && oldQueryString == window.location.search) {
+  if (
+    sessionOptions &&
+    oldQueryString == window.location.search + window.location.hash
+  ) {
     loadPreset(JSON.parse(sessionOptions));
     // Reflect the restored state in the URL. This replaces the current entry rather than
     // pushing a new one, since it describes the same simulation and so doesn't warrant its
@@ -1060,7 +1071,10 @@ async function VisualPDE(url) {
     ) {
       // If so, add to session storage so that it can be loaded on return, and add the URL to history.
       sessionStorage.setItem("options", JSON.stringify(options));
-      sessionStorage.setItem("oldQueryString", window.location.search);
+      sessionStorage.setItem(
+        "oldQueryString",
+        window.location.search + window.location.hash,
+      );
     }
   });
 
@@ -1388,6 +1402,21 @@ async function VisualPDE(url) {
 
     // Create a GUI.
     initGUI();
+
+    // Scroll back to the top whenever any input loses focus, undoing Safari's zoom/scroll on
+    // focus. Delegated from the document so that it also covers inputs created after initGUI()
+    // (e.g. new Parameters/Substitutions rows, the diffusion matrix popup). Capture phase, as
+    // a definition row's own blur handler can remove it from the DOM before a bubbling
+    // listener would see the event.
+    document.addEventListener(
+      "blur",
+      function (e) {
+        if (e.target.tagName != "INPUT") return;
+        window.scrollTo({ top: -1, left: 0, behavior: "smooth" });
+        document.body.scrollTo(0, 0);
+      },
+      true,
+    );
 
     // Configure the GUI.
     configureGUI();
@@ -3891,14 +3920,9 @@ async function VisualPDE(url) {
     // Always make images controller, but hide them if they're not wanted.
     createImageControllers();
 
-    const inputs = document.querySelectorAll("input");
-    inputs.forEach((input) => disableAutocorrect(input));
-    inputs.forEach((input) =>
-      input.addEventListener("blur", function () {
-        window.scrollTo({ top: -1, left: 0, behaviour: "smooth" });
-        document.body.scrollTo(0, 0);
-      }),
-    );
+    document
+      .querySelectorAll("input")
+      .forEach((input) => disableAutocorrect(input));
 
     // Put all title elements in the taborder, and make Enter key click them.
     document.querySelectorAll(".dg li.title").forEach((title) => {
@@ -5118,8 +5142,12 @@ async function VisualPDE(url) {
 
     // Substitute user-defined expressions (raw text macros, not GLSL quantities) before any
     // other parsing, so everything below only ever sees expression-free text.
-    // expandedExpressionDefs is kept up to date by refreshExpressionExpansions(), called once
-    // per shader rebuild in updateShaders().
+    // expandedExpressionDefs is rebuilt by refreshExpressionExpansions(), called once per
+    // shader rebuild in updateShaders(). Shader builders can also run outside of
+    // updateShaders() (e.g. configureGUI() -> configureProbe() -> setProbeShader(), which
+    // runs before updateShaders() in updateProblem()), so make sure the expansions match the
+    // current expressions first.
+    ensureExpressionExpansionsCurrent();
     Object.keys(expandedExpressionDefs).forEach((name) => {
       str = str.replaceAll(
         new RegExp("\\b" + name + "\\b", "g"),
@@ -6652,6 +6680,8 @@ async function VisualPDE(url) {
     reconcileGlobalIntegrals();
     // Insert any user-defined kinetic parameters, as uniforms.
     let kineticStr = kineticUniformsForShader();
+    // Species whose initial conditions reference the solution - see parseInitCond().
+    const badInitConds = [];
     if (numGroups(Number(options.numSpecies)) > 1) {
       // MRT (>4-species) path: separate top/bot (dual output, GLSL3) and species-5-8
       // locals. Kept entirely separate from the numGroups===1 branch below (rather than
@@ -6676,22 +6706,14 @@ async function VisualPDE(url) {
       if (/\bRANDN(_[1234])?\b/.test(allClearShaders)) {
         shaderStr += randNShader();
       }
-      shaderStr +=
-        "float u = " + parseShaderString(options.initCond_1, false) + ";\n";
-      shaderStr +=
-        "float v = " + parseShaderString(options.initCond_2, false) + ";\n";
-      shaderStr +=
-        "float w = " + parseShaderString(options.initCond_3, false) + ";\n";
-      shaderStr +=
-        "float q = " + parseShaderString(options.initCond_4, false) + ";\n";
-      shaderStr +=
-        "float u5 = " + parseShaderString(options.initCond_5, false) + ";\n";
-      shaderStr +=
-        "float u6 = " + parseShaderString(options.initCond_6, false) + ";\n";
-      shaderStr +=
-        "float u7 = " + parseShaderString(options.initCond_7, false) + ";\n";
-      shaderStr +=
-        "float u8 = " + parseShaderString(options.initCond_8, false) + ";\n";
+      shaderStr += "float u = " + parseInitCond(0, badInitConds) + ";\n";
+      shaderStr += "float v = " + parseInitCond(1, badInitConds) + ";\n";
+      shaderStr += "float w = " + parseInitCond(2, badInitConds) + ";\n";
+      shaderStr += "float q = " + parseInitCond(3, badInitConds) + ";\n";
+      shaderStr += "float u5 = " + parseInitCond(4, badInitConds) + ";\n";
+      shaderStr += "float u6 = " + parseInitCond(5, badInitConds) + ";\n";
+      shaderStr += "float u7 = " + parseInitCond(6, badInitConds) + ";\n";
+      shaderStr += "float u8 = " + parseInitCond(7, badInitConds) + ";\n";
       shaderStr += clearShaderBotMRT();
       shaderStr = replaceMINXMINY(shaderStr);
       assignFragmentShader(clearMaterial, shaderStr);
@@ -6713,20 +6735,42 @@ async function VisualPDE(url) {
       if (/\bRANDN(_[1234])?\b/.test(allClearShaders)) {
         shaderStr += randNShader();
       }
-      shaderStr +=
-        "float u = " + parseShaderString(options.initCond_1, false) + ";\n";
-      shaderStr +=
-        "float v = " + parseShaderString(options.initCond_2, false) + ";\n";
-      shaderStr +=
-        "float w = " + parseShaderString(options.initCond_3, false) + ";\n";
-      shaderStr +=
-        "float q = " + parseShaderString(options.initCond_4, false) + ";\n";
+      shaderStr += "float u = " + parseInitCond(0, badInitConds) + ";\n";
+      shaderStr += "float v = " + parseInitCond(1, badInitConds) + ";\n";
+      shaderStr += "float w = " + parseInitCond(2, badInitConds) + ";\n";
+      shaderStr += "float q = " + parseInitCond(3, badInitConds) + ";\n";
       shaderStr += clearShaderBot();
       shaderStr = replaceMINXMINY(shaderStr);
       assignFragmentShader(clearMaterial, shaderStr);
       clearMaterial.glslVersion = null;
     }
     clearMaterial.needsUpdate = true;
+    if (badInitConds.length > 0) {
+      throwError(
+        "Initial conditions can't depend on the solution. Please check the initial condition" +
+          (badInitConds.length > 1 ? "s" : "") +
+          " for " +
+          badInitConds.map((name) => "'" + name + "'").join(", ") +
+          " and any expressions used in " +
+          (badInitConds.length > 1 ? "them" : "it") +
+          ". These will be treated as 0 for now.",
+      );
+    }
+  }
+
+  function parseInitCond(ind, badInitConds) {
+    // Parse the initial condition of species ind into GLSL for the clear shader. The clear
+    // shader has no access to the current state, so any reference to a species (uvwq/uvwq2
+    // after parsing, possibly arriving via an expression) would only surface later as a
+    // generic "undeclared identifier" compile error. Instead, record the species in
+    // badInitConds and substitute 0.0, so that the shader always compiles and setClearShader
+    // can report a descriptive error.
+    const str = parseShaderString(options["initCond_" + (ind + 1)], false);
+    if (/\buvwq2?\b/.test(str)) {
+      badInitConds.push(listOfSpecies[ind]);
+      return " 0.0 ";
+    }
+    return str;
   }
 
   function setProbeShader() {
@@ -9251,6 +9295,18 @@ async function VisualPDE(url) {
       );
     }
     expandedExpressionDefs = expanded;
+    expandedExpressionDefsSource = options.expressions;
+  }
+
+  /**
+   * Rebuilds expandedExpressionDefs only if options.expressions has changed since it was last
+   * built. Cheap enough to call from every parseShaderString(), and only reports duplicate/
+   * cyclic errors once per change, unlike calling refreshExpressionExpansions() directly.
+   */
+  function ensureExpressionExpansionsCurrent() {
+    if (expandedExpressionDefsSource !== options.expressions) {
+      refreshExpressionExpansions();
+    }
   }
 
   function addKineticParameterAfterError(paramName) {
@@ -11661,15 +11717,16 @@ async function VisualPDE(url) {
     // Get the URL of the current sim.
     getSimURL(false);
     let url = longSimURL;
-    // Use the UI options specified in embed_ui_type to append ui options.
+    // Use the UI options specified in embed_ui_type to add ui options to the query string,
+    // which comes before the #options=... of the URL.
     switch (document.getElementById("embed_ui_type").value) {
       case "full":
         break;
       case "story":
-        url += "&story";
+        url = url.replace("#", "?story#");
         break;
       case "none":
-        url += "&logo_only";
+        url = url.replace("#", "?logo_only#");
         break;
     }
     // Put the url in an iframe and copy to clipboard.
@@ -11682,18 +11739,11 @@ async function VisualPDE(url) {
 
   /**
    * Returns a compressed, URI-safe representation of the current simulation configuration,
-   * as used for the value of the `options` search parameter.
+   * as used for the value of the `options` parameter in the hash of links (see url_codec.js).
    * @returns {string} The compressed options string.
    */
   function getCompressedOptions() {
-    // First, get the options that differ from the default.
-    let objDiff = diffObjects(options, getPreset("default"));
-    objDiff.preset = "Custom";
-    // Remove any parents so that loading happens from the default sim.
-    delete objDiff.parent;
-    // Minify the field names in order to generate shorter URLs.
-    objDiff = minifyPreset(objDiff);
-    return LZString.compressToEncodedURIComponent(JSON.stringify(objDiff));
+    return encodeOptions(options);
   }
 
   /**
@@ -11703,14 +11753,14 @@ async function VisualPDE(url) {
   function getSimURL(shorten = true) {
     const base = location.origin + location.pathname.replace(/\/$/, "");
     const shortOpts = getCompressedOptions();
-    const queryString = "?options=" + shortOpts;
-    let str = [base, queryString].join("");
+    const hashString = "#options=" + shortOpts;
+    let str = [base, hashString].join("");
     // Keep the long URL as a fallback.
     longSimURL = str;
     simURL = longSimURL;
     // Asynchronously shorten the URL, replcing the long URL with the shortened one when complete.
     if (shorten) shortenURL(base, shortOpts);
-    return queryString;
+    return hashString;
   }
 
   /**
@@ -11786,10 +11836,10 @@ async function VisualPDE(url) {
     lastURLOptions = compressedOptions;
     // Carry over any search parameters that configure the page rather than the simulation
     // (story, no_ui, sf, ...), preserving their original encoding. Anything that describes
-    // the state of the simulation is superseded by the new options string: that's preset,
-    // options and mini, plus view and any parameter named after a field of options, all of
-    // which are applied on top of the options string when loading and would otherwise
-    // clobber the state we're storing.
+    // the state of the simulation is superseded by the new options string in the hash:
+    // that's preset, options and mini, plus view and any parameter named after a field of
+    // options, all of which are applied on top of the options string when loading and would
+    // otherwise clobber the state we're storing.
     const otherParams = window.location.search
       .replace(/^\?/, "")
       .split("&")
@@ -11798,10 +11848,14 @@ async function VisualPDE(url) {
         const key = decodeURIComponent(param.split("=")[0]);
         return !stateSearchParams.includes(key) && !(key in options);
       });
-    const queryString = ["options=" + compressedOptions]
-      .concat(otherParams)
-      .join("&");
-    history.replaceState({}, "", window.location.pathname + "?" + queryString);
+    history.replaceState(
+      {},
+      "",
+      window.location.pathname +
+        (otherParams.length ? "?" + otherParams.join("&") : "") +
+        "#options=" +
+        compressedOptions,
+    );
   }
 
   /**
@@ -12922,9 +12976,11 @@ async function VisualPDE(url) {
     // If a ) is followed by a (, add a *.
     str = str.replaceAll(/\)\(/g, ")*(");
 
-    // If the string contains xy or yx, replace with x*y.
-    str = str.replaceAll(/\bxy\b/g, "x*y");
-    str = str.replaceAll(/\byx\b/g, "y*x");
+    // If the string contains xy or yx (and the user hasn't declared a name by that spelling),
+    // replace with x*y.
+    str = str.replaceAll(/\b(xy|yx)\b/g, (word) =>
+      declaredNames.has(word) ? word : word[0] + "*" + word[1],
+    );
 
     // If the string contains + + or ++, replace with +.
     while (str != (str = str.replace(/\+\s*\+/g, "+")));
@@ -12940,26 +12996,19 @@ async function VisualPDE(url) {
     str = str.replaceAll(/>\s*=/g, ">=");
     str = str.replaceAll(/<\s*=/g, "<=");
 
-    // For each pair of single-character species names that is not itself a species name, add a *.
-    const singleCharNames = listOfSpecies.filter((name) => name.length == 1);
-    singleCharNames.forEach((name1) => {
-      singleCharNames.forEach((name2) => {
-        if (!listOfSpecies.includes(name1 + name2)) {
-          // Replace all occurrences of name1 followed by name2 with name1*name2.
-          str = str.replaceAll(
-            new RegExp("\\b" + name1 + name2 + "\\b", "g"),
-            name1 + "*" + name2,
-          );
-        }
-        if (!listOfSpecies.includes(name2 + name1)) {
-          // Replace all occurrences of name1 followed by name2 with name1*name2.
-          str = str.replaceAll(
-            new RegExp("\\b" + name2 + name1 + "\\b", "g"),
-            name2 + "*" + name1,
-          );
-        }
-      });
-    });
+    // A two-letter word made of two single-character species names is their product - unless
+    // the user has declared that word as a name in its own right (a species, parameter or
+    // substitution called "uv" must stay "uv", not become "u*v").
+    const singleCharNames = new Set(
+      listOfSpecies.filter((name) => name.length == 1),
+    );
+    str = str.replaceAll(/\b[a-zA-Z]{2}\b/g, (word) =>
+      singleCharNames.has(word[0]) &&
+      singleCharNames.has(word[1]) &&
+      !declaredNames.has(word)
+        ? word[0] + "*" + word[1]
+        : word,
+    );
 
     // If the string contains a single species name (with optional _[xy]) followed by a (, add a *.
     str = str.replaceAll(
@@ -13221,6 +13270,7 @@ async function VisualPDE(url) {
         const fieldName = "diffusionStr_" + (i + 1) + "_" + (j + 1);
         const input = document.createElement("input");
         input.type = "text";
+        disableAutocorrect(input);
         input.style.gridColumn = 4 + j;
         input.style.gridRow = 2 + i;
         if (i === j && isSpeciesAlgebraic(i)) {

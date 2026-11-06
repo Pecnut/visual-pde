@@ -138,6 +138,19 @@ test("Parameters: a name already in use (an existing parameter) is rejected via 
   await dismissError();
 });
 
+test("Parameters: names the shaders use (GLSL keywords, uniforms, main) are rejected via the #error banner, not left to fail to compile", async () => {
+  // Without the previous test's duplicate, which would be reported instead.
+  await fillRowFromEnd("Parameters", 1, "");
+  await dismissError();
+  for (const name of ["sample", "struct", "nXDisc", "isTwoD", "main", "MINX"]) {
+    await fillTrailingField("Parameters", `${name} = 1`);
+    assert.ok(await page.locator("#error").isVisible(), `the error banner should appear for '${name}'`);
+    assert.match(await page.locator("#error").innerText(), new RegExp(`'${name}' is (already in use|used under the hood)`));
+    await dismissError();
+    await fillRowFromEnd("Parameters", 1, "");
+  }
+});
+
 test("Expressions: typing into the trailing empty field promotes it the same way as Parameters", async () => {
   await ensureOpen(page, "Substitutions");
   const before = await folderRows("Substitutions");

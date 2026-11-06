@@ -412,12 +412,12 @@ VisualPDE allows you to interact directly with simulations via a brush by simply
 
 - #### Largest side
 
-  Change the largest side $L$ of the domain. Must be a mathematical expression that is not written in terms of any other parameters or user-defined quantities. If this is not an integer multiple of the space step $\Delta x=\Delta y$, the domain will extend to $\left\lfloor L / \Delta x\right\rfloor\Delta x$ in practice. This guarantees the use of a precise space step.
+  Change the largest side $L$ of the domain. Must be a mathematical expression that is not written in terms of any other parameters or user-defined quantities. If this is not an integer multiple of the space step $\Delta x=\Delta y$, the domain will extend to $\left\lfloor L / \Delta x\right\rfloor\Delta x$ in practice. This guarantees the use of a precise space step. The size of the domain as used in expressions ($L$, $L_x$ and $L_y$) is this actual size, so the nodes span exactly $L_x$ in $x$ and $L_y$ in $y$.
   JSON key: `domainScale`, definition, string. Default: `"1000"`.
 
 - #### Space step
 
-  Set the space step $\Delta x=\Delta y$ used in discretising the domain. You may have to decrease the timestep $\Delta t$ in order to maintain numerical stability if you decrease the space step (as discussed in the [timestepping guide](/user-guide/solver#timestepping)). Must be a mathematical expression that is not written in terms of any other parameters or user-defined quantities.
+  Set the space step $\Delta x=\Delta y$ used in discretising the domain. This step is used exactly, everywhere: nodes are exactly $\Delta x$ apart, so the domain may be slightly smaller than requested (see **Largest side**). You may have to decrease the timestep $\Delta t$ in order to maintain numerical stability if you decrease the space step (as discussed in the [timestepping guide](/user-guide/solver#timestepping)). Must be a mathematical expression that is not written in terms of any other parameters or user-defined quantities.
   JSON key: `spatialStep`, definition, string. Default: `"3"`.
 
 - #### Min. $x$, $y$

@@ -90,8 +90,18 @@ test("probeShader: contains PROBE_FUN/PROBE_X/PROBE_Y placeholders and the 9-poi
 test("probeShaderMRT: adds textureSourceGroup1 sampler and group-1 9-point stencil before derivative computation", () => {
   const mrt = probeShaderMRT();
   assert.match(mrt, /uniform sampler2D textureSourceGroup1;/);
-  assert.match(mrt, /uvwq2LL = texture2D\(textureSourceGroup1/);
+  assert.match(mrt, /uvwq2LL = textureBilinear\(textureSourceGroup1/);
   const group1Index = mrt.indexOf("// Sample (group 1).");
   const derivIndex = mrt.indexOf("// Compute derivatives.\n      vec4 uvwqX");
   assert.ok(group1Index >= 0 && derivIndex >= 0 && group1Index < derivIndex);
+});
+
+test("minMaxShader: reduces each texel's 2x2 block of source texels by index, within bounds", () => {
+  // As sumShader does: with normalised coordinates, blocks don't line up with the texels of
+  // odd-sized textures, and some texels were never read.
+  const src = minMaxShader();
+  assert.match(src, /ivec2 srcTexel = outTexel \* 2 \+ ivec2\(x, y\);/);
+  assert.match(src, /srcTexel\.x < int\(srcResolution\.x\) && srcTexel\.y < int\(srcResolution\.y\)/);
+  assert.match(src, /texture2D\(textureSource, \(vec2\(srcTexel\) \+ 0\.5\) \/ srcResolution\)/);
+  assert.doesNotMatch(src, /onePixel/);
 });

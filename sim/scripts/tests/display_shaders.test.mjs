@@ -35,8 +35,8 @@ test("embossShader/contourShader: non-empty fragments referencing expected unifo
 test("overlayShader: samples the 5-point stencil and substitutes OVERLAYEXPR", () => {
   const shader = overlayShader();
   assert.match(shader, /OVERLAYEXPR/);
-  assert.match(shader, /uvwqL = texture2D\(textureSource1/);
-  assert.match(shader, /uvwqR = texture2D\(textureSource1/);
+  assert.match(shader, /uvwqL = textureBilinear\(textureSource1/);
+  assert.match(shader, /uvwqR = textureBilinear\(textureSource1/);
 });
 
 test("fiveColourDisplayTopMRT: adds textureSourceGroup1 sampler alongside textureSource1", () => {
@@ -48,8 +48,8 @@ test("fiveColourDisplayTopMRT: adds textureSourceGroup1 sampler alongside textur
 
 test("overlayShaderMRT: injects group-1 stencil sampling before the OVERLAYEXPR substitution", () => {
   const mrt = overlayShaderMRT();
-  assert.match(mrt, /uvwq2 = texture2D\(textureSourceGroup1, textureCoords\);/);
-  const group1Index = mrt.indexOf("uvwq2 = texture2D(textureSourceGroup1");
+  assert.match(mrt, /uvwq2 = textureBilinear\(textureSourceGroup1, textureCoords\);/);
+  const group1Index = mrt.indexOf("uvwq2 = textureBilinear(textureSourceGroup1");
   const overlayIndex = mrt.indexOf("float overlayExpr = OVERLAYEXPR;");
   assert.ok(group1Index >= 0 && overlayIndex >= 0 && group1Index < overlayIndex);
 });

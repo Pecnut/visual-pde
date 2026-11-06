@@ -34,13 +34,19 @@ import {
   computeDisplayFunShaderMidMRT,
   probeShaderMRT,
 } from "./post_shaders.js";
-import { copyShader, copyShaderMRT } from "../copy_shader.js";
+import {
+  copyShader,
+  copyShaderMRT,
+  exactCopyShader,
+  checkpointShaderMRT,
+} from "../copy_shader.js";
 import {
   RDShaderTop,
   RDShaderBot,
   RDShaderDirichletX,
   RDShaderDirichletY,
   RDShaderDirichletIndicatorFun,
+  RDShaderDirichletForStage,
   RDShaderRobinX,
   RDShaderRobinY,
   RDShaderRobinCustomDomainX,
@@ -149,6 +155,9 @@ async function VisualPDE(url) {
     postTexture,
     interpolationTexture,
     probeTexture,
+    // The integral probe's integrand at each node, and its values read back (see render).
+    probeFieldTexture,
+    probeFieldBuffer,
     clickTexture,
     simTextureOpts,
     reductionTextures = [],
@@ -320,7 +329,9 @@ async function VisualPDE(url) {
     expandedExpressionDefs = {},
     // The options.expressions string that expandedExpressionDefs was last built from - see
     // ensureExpressionExpansionsCurrent().
-    expandedExpressionDefsSource = null;
+    expandedExpressionDefsSource = null,
+    // The names a parameter can't take - see getShaderReservedNames().
+    shaderReservedNames;
   const llmURL =
     "https://gemini.google.com/gem/1mJ4572e1TJwEHcaYDst0_9keZkx78-zn";
   const defaultPreset = "GrayScott";
@@ -1162,10 +1173,15 @@ async function VisualPDE(url) {
 
     // Configure textures with placeholder sizes. We'll need two textures for simulation (A,B), one for
     // post processing, and another for (optional) manual interpolation.
+    // Simulation textures always use nearest filtering, so that stencil reads at texel centres
+    // are exact: with linear filtering, rounding in the texture coordinates blends in a sliver
+    // of the neighbouring texel at every read. Lookups at arbitrary points interpolate
+    // explicitly instead (textureBilinear in auxiliary_GLSL_funs.js).
     simTextureOpts = {
       format: THREE.RGBAFormat,
       type: THREE.FloatType,
       minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
     };
 
     // Check if we should be interpolating manually due to extensions not being supported.
@@ -1181,9 +1197,6 @@ async function VisualPDE(url) {
       navigator.maxTouchPoints > 0 ||
       navigator.msMaxTouchPoints > 0;
 
-    manualInterpolationNeeded
-      ? (simTextureOpts.magFilter = THREE.NearestFilter)
-      : (simTextureOpts.magFilter = THREE.LinearFilter);
     // Store all the simulation textures in an array. They'll be in history order, so that the first element is the most
     // recent. We'll write to the first texture, with later elements being further back in time.
     simTextures.push(
@@ -1195,6 +1208,12 @@ async function VisualPDE(url) {
     );
     postTexture = simTextures[0].clone();
     interpolationTexture = simTextures[0].clone();
+    // The display textures interpolate in hardware unless we're interpolating manually.
+    [postTexture, interpolationTexture].forEach((tex) => {
+      tex.texture.magFilter = manualInterpolationNeeded
+        ? THREE.NearestFilter
+        : THREE.LinearFilter;
+    });
 
     // Periodic boundary conditions (for now).
 
@@ -1322,8 +1341,8 @@ async function VisualPDE(url) {
     copyMaterial = new THREE.ShaderMaterial({
       uniforms: uniforms,
       vertexShader: genericVertexShader(),
-      fragmentShader: copyShader(),
     });
+    assignFragmentShader(copyMaterial, copyShader());
     // A material for clearing the domain.
     clearMaterial = new THREE.ShaderMaterial({
       uniforms: uniforms,
@@ -1353,9 +1372,8 @@ async function VisualPDE(url) {
     });
     // MRT counterpart of checkpointMaterial (Stage 11.5 of the 8-species upgrade) - a
     // MeshBasicMaterial can only sample one texture/write one output, so restoring a
-    // checkpoint once numGroups>1 needs a real ShaderMaterial instead. Reuses copyShaderMRT
-    // (already samples textureSource/textureSourceGroup1 and writes fragColor0/fragColor1)
-    // with its own dedicated uniforms object - NOT the shared `uniforms` - since that
+    // checkpoint once numGroups>1 needs a real ShaderMaterial instead, sampling as the
+    // MeshBasicMaterial does (see checkpointShaderMRT), with its own dedicated uniforms object - NOT the shared `uniforms` - since that
     // object's textureSource/textureSourceGroup1 are reassigned constantly by every other
     // MRT material and this one's inputs (the checkpoint textures) are set only when
     // restoring, not every frame.
@@ -1363,11 +1381,13 @@ async function VisualPDE(url) {
       uniforms: {
         textureSource: { type: "t", value: null },
         textureSourceGroup1: { type: "t", value: null },
+        checkpointRepeat: { value: new THREE.Vector2(1, 1) },
+        checkpointOffset: { value: new THREE.Vector2(0, 0) },
       },
       vertexShader: genericVertexShader(),
-      fragmentShader: copyShaderMRT(),
       glslVersion: THREE.GLSL3,
     });
+    assignFragmentShader(checkpointMaterialMRT, checkpointShaderMRT());
     minMaxMaterial = new THREE.ShaderMaterial({
       uniforms: minMaxUniforms,
       vertexShader: genericVertexShader(),
@@ -1669,12 +1689,22 @@ async function VisualPDE(url) {
   }
 
   function updateSizeUniforms() {
-    uniforms.L.value = domainScaleValue;
-    uniforms.L_y.value = domainHeight;
-    uniforms.L_x.value = domainWidth;
-    uniforms.L_min.value = Math.min(domainHeight, domainWidth);
+    // The nodes are exactly the requested spatial step apart, as the step governs stability.
+    // So the simulated domain is the nodes' extent, nXDisc * dx by nYDisc * dy, which can be
+    // a little smaller than the requested domain, and L_x, L_y (and L, along the side the
+    // domain scale sets) are its actual size, so that positions agree with the finite
+    // differences everywhere.
     uniforms.dx.value = spatialStepValue;
     uniforms.dy.value = spatialStepValue;
+    uniforms.L_x.value = nXDisc * spatialStepValue;
+    // In 1D there's a single row of nodes, and y keeps the displayed height.
+    uniforms.L_y.value =
+      options.dimension == 1 ? domainHeight : nYDisc * spatialStepValue;
+    uniforms.L.value =
+      options.dimension != 1 && aspectRatio >= 1
+        ? uniforms.L_y.value
+        : uniforms.L_x.value;
+    uniforms.L_min.value = Math.min(uniforms.L_x.value, uniforms.L_y.value);
   }
 
   function computeCanvasSizesAndAspect() {
@@ -1703,8 +1733,6 @@ async function VisualPDE(url) {
     if (options.dimension == 1) {
       domainWidth = domainScaleValue;
     }
-    uniforms.L_x.value = domainWidth;
-    uniforms.L_y.value = domainHeight;
     maxDim = Math.max(domainWidth, domainHeight);
   }
 
@@ -1738,9 +1766,9 @@ async function VisualPDE(url) {
     nYDisc = Math.floor(domainHeight / spatialStepValue);
     if (nXDisc > maxTexSize || nYDisc > maxTexSize) {
       throwError(
-        "Your device does not support a discretisation this fine (maximum " +
+        "Your device does not support a discretisation this fine (at most " +
           maxTexSize +
-          "MB). Please increase the space step to at least " +
+          " points in each direction). Please increase the space step to at least " +
           (Math.ceil((1e4 * domainScaleValue) / maxTexSize) / 1e4).toPrecision(
             4,
           ) +
@@ -1779,6 +1807,8 @@ async function VisualPDE(url) {
     setDefaultRenderSize();
     buffer = new Float32Array(nXDisc * nYDisc * 4);
     bufferFilled = false;
+    // The domain's size and spacing follow from the discretisation.
+    updateSizeUniforms();
   }
 
   function createDisplayDomains() {
@@ -1937,9 +1967,14 @@ async function VisualPDE(url) {
   }
 
   function nudgeTextureSizeUpDown() {
-    // Force a texture reupload by modifying the size of the textures and then resetting it.
-    resizeTextures(1);
-    resizeTextures(0);
+    // Make three.js set the display textures up again, so that a change to their filtering
+    // takes effect, by changing their size and back. The simulation's textures are left
+    // alone, as resizing them would resample (and so change) the state.
+    [postTexture, interpolationTexture].forEach((tex) => {
+      const { width, height } = tex;
+      tex.setSize(width + 1, height + 1);
+      tex.setSize(width, height);
+    });
   }
 
   function initUniforms() {
@@ -4425,6 +4460,13 @@ async function VisualPDE(url) {
   }
 
   function render(isResetting) {
+    // Loading a >4-species configuration can trigger a render (e.g. from pauseSim() in
+    // loadOptions()) before updateProblem() has created the MRT render targets that hold its
+    // state. There's nothing to draw yet, and loadPreset() always finishes with resetSim(),
+    // which renders again, so skip it.
+    if (numGroups(Number(options.numSpecies)) > 1 && !mrtSimTextures.length)
+      return;
+
     // Perform any postprocessing on the last computed values.
     postprocess();
 
@@ -4592,13 +4634,16 @@ async function VisualPDE(url) {
       render();
     }
 
-    // If we're probing via an integral, we overwrite postTexture (now that we're done with it) to compute the integral.
+    // If we're probing via an integral, compute the integrand at each node, in a texture of
+    // its own (as the plotted values in postTexture are read after rendering, e.g. for the
+    // colour range and the check for NaNs).
     if (
       options.probing &&
       options.probeType == "integral" &&
       readyForProbeUpdate()
     ) {
-      bufferFilled = false;
+      if (!probeFieldTexture) probeFieldTexture = postTexture.clone();
+      probeFieldTexture.setSize(nXDisc, nYDisc);
       simDomain.material = probeMaterial;
       if (numGroups(Number(options.numSpecies)) > 1) {
         uniforms.textureSource.value = mrtSimTextures[1].texture[0];
@@ -4606,9 +4651,19 @@ async function VisualPDE(url) {
       } else {
         uniforms.textureSource.value = simTextures[1].texture;
       }
-      renderer.setRenderTarget(postTexture);
+      renderer.setRenderTarget(probeFieldTexture);
       renderer.render(simScene, simCamera);
-      fillBuffer();
+      if (probeFieldBuffer?.length != 4 * nXDisc * nYDisc) {
+        probeFieldBuffer = new Float32Array(4 * nXDisc * nYDisc);
+      }
+      renderer.readRenderTargetPixels(
+        probeFieldTexture,
+        0,
+        0,
+        nXDisc,
+        nYDisc,
+        probeFieldBuffer,
+      );
       let dA;
       if (options.dimension == 1) {
         dA = uniforms.dx.value;
@@ -4616,8 +4671,8 @@ async function VisualPDE(url) {
         dA = uniforms.dx.value * uniforms.dy.value;
       }
       let total = 0;
-      for (let i = 0; i < buffer.length; i += 4) {
-        total += buffer[i] * (1 - buffer[i + 1]);
+      for (let i = 0; i < probeFieldBuffer.length; i += 4) {
+        total += probeFieldBuffer[i] * (1 - probeFieldBuffer[i + 1]);
       }
       total *= dA;
       addProbeData(uniforms.t.value, total);
@@ -4834,12 +4889,43 @@ async function VisualPDE(url) {
         groups,
       ),
     );
-    // Match simTextures' periodic wrapping (set on every attachment of every slot).
+    // Species 1-4 wrap as simTextures do (see setStateTextureWrapping); species 5-8 always
+    // wrap, and are clamped in the shader where needed.
     mrtSimTextures.forEach((mrtTex) => {
-      mrtTex.texture.forEach((tex) => {
-        tex.wrapS = THREE.RepeatWrapping;
-        tex.wrapT = THREE.RepeatWrapping;
+      mrtTex.texture.forEach((tex, group) => {
+        tex.wrapS =
+          group == 0 ? simTextures[0].texture.wrapS : THREE.RepeatWrapping;
+        tex.wrapT =
+          group == 0 ? simTextures[0].texture.wrapT : THREE.RepeatWrapping;
       });
+    });
+  }
+
+  /**
+   * Sets how the textures holding species 1-4 wrap at the edges (in every history slot, and
+   * whether they hold 4 species or are the first of several groups), so that lookups beyond
+   * the edges are periodic or clamped. three.js only applies a render target's wrapping when
+   * it first allocates it, so the change is also made to any already allocated.
+   * @param {number} wrapS - THREE.RepeatWrapping or THREE.ClampToEdgeWrapping, in x.
+   * @param {number} wrapT - Likewise in y.
+   */
+  function setStateTextureWrapping(wrapS, wrapT) {
+    const textures = [
+      ...simTextures.map((target) => target.texture),
+      ...mrtSimTextures.map((target) => target.texture[0]),
+    ];
+    const glWrap = (wrap) =>
+      wrap == THREE.ClampToEdgeWrapping ? gl.CLAMP_TO_EDGE : gl.REPEAT;
+    textures.forEach((texture) => {
+      if (texture.wrapS == wrapS && texture.wrapT == wrapT) return;
+      texture.wrapS = wrapS;
+      texture.wrapT = wrapT;
+      const webglTexture = renderer.properties.get(texture).__webglTexture;
+      if (!webglTexture) return;
+      renderer.state.bindTexture(gl.TEXTURE_2D, webglTexture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, glWrap(wrapS));
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, glWrap(wrapT));
+      renderer.state.unbindTexture();
     });
   }
 
@@ -4883,6 +4969,13 @@ async function VisualPDE(url) {
         checkpointMaterialMRT.uniforms.textureSource.value = checkpointTexture;
         checkpointMaterialMRT.uniforms.textureSourceGroup1.value =
           checkpointTextureGroup1 ?? tempZeroGroup1Tex;
+        // As setStretchOrCropTexture() set them for checkpointMaterial's map.
+        checkpointMaterialMRT.uniforms.checkpointRepeat.value.copy(
+          checkpointTexture.repeat,
+        );
+        checkpointMaterialMRT.uniforms.checkpointOffset.value.copy(
+          checkpointTexture.offset,
+        );
         simDomain.material = checkpointMaterialMRT;
       } else {
         simDomain.material = checkpointMaterial;
@@ -5214,7 +5307,7 @@ async function VisualPDE(url) {
         const textureUniform =
           speciesToGroupInd(d1) === 0 ? "textureSource" : "textureSourceGroup1";
         return (
-          "texture(" +
+          "textureBilinear(" +
           textureUniform +
           ", vec2((" +
           d2 +
@@ -5226,11 +5319,14 @@ async function VisualPDE(url) {
       },
     );
 
-    // Replace powers with safepow, including nested powers.
+    // Replace powers with safepow, including nested powers. Small positive integer powers
+    // are unrolled into products instead, which is both cheaper and more accurate than pow.
+    // The unrolling is capped at 4 because the base is repeated textually, so nested powers
+    // of large expressions would otherwise blow up the shader size.
     str = replaceBinOperator(str, "^", function (m, p1, p2) {
-      if (p2 == "0") return "1";
       const exp = Number(p2);
-      if (Number.isInteger(exp && exp > 0 && exp < 101)) {
+      if (p2 != "" && exp == 0) return "1";
+      if (Number.isInteger(exp) && exp > 0 && exp <= 4) {
         return "((" + p1 + ")" + ("*(" + p1 + ")").repeat(exp - 1) + ")";
       } else return "safepow(" + p1 + "," + p2 + ")";
     });
@@ -5311,9 +5407,9 @@ async function VisualPDE(url) {
       str = joker + (tab.length - 1);
       let regex;
       if (needsEscaping) {
-        regex = new RegExp("([\\w.]*)\\s*\\" + op + "\\s*([\\w.]*)", "g");
+        regex = new RegExp("([\\w.]*)\\s*\\" + op + "\\s*(-?[\\w.]*)", "g");
       } else {
-        regex = new RegExp("([\\w.]*)\\s*" + op + "\\s*([\\w.]*)", "g");
+        regex = new RegExp("([\\w.]*)\\s*" + op + "\\s*(-?[\\w.]*)", "g");
       }
       while (str.indexOf(joker) > -1) {
         str = str.replace(new RegExp(joker + "(\\w+)", "g"), function (m, d) {
@@ -5497,12 +5593,6 @@ async function VisualPDE(url) {
 
     let edgeClampSpeciesH = [false, false, false, false];
     let edgeClampSpeciesV = [false, false, false, false];
-
-    // Initially set all simulation textures to repeat wrapping for periodicity.
-    simTextures.forEach((simTex) => {
-      simTex.texture.wrapS = THREE.RepeatWrapping;
-      simTex.texture.wrapT = THREE.RepeatWrapping;
-    });
 
     const BCStrs = [
       options.boundaryConditions_1,
@@ -5778,34 +5868,31 @@ async function VisualPDE(url) {
       return;
     }
 
-    // Edge clamp all the simulation textures if every species needs clamping.
-    if (edgeClampSpeciesH.every((x) => x)) {
-      simTextures.forEach((simTex) => {
-        simTex.texture.wrapS = THREE.ClampToEdgeWrapping;
-      });
-    } else {
-      // If only some species need clamping, we'll do it in the shader.
-      let channels = "";
-      edgeClampSpeciesH.forEach((x, ind) => {
-        if (x) channels += speciesToChannelChar(listOfSpecies[ind]);
-      });
-      clampShader += channels
-        ? clampSpeciesToEdgeShader("H").replaceAll(/\bSPECIES\b/g, channels)
-        : "";
-    }
-    if (edgeClampSpeciesV.every((x) => x)) {
-      simTextures.forEach((simTex) => {
-        simTex.texture.wrapT = THREE.ClampToEdgeWrapping;
-      });
-    } else {
-      let channels = "";
-      edgeClampSpeciesV.forEach((x, ind) => {
-        if (x) channels += speciesToChannelChar(listOfSpecies[ind]);
-      });
-      clampShader += channels
-        ? clampSpeciesToEdgeShader("V").replaceAll(/\bSPECIES\b/g, channels)
-        : "";
-    }
+    // The shader code clamping species 1-4 at the edges, in each direction.
+    const clampChannelsH = edgeClampSpeciesH
+      .map((x, ind) => (x ? speciesToChannelChar(listOfSpecies[ind]) : ""))
+      .join("");
+    const clampChannelsV = edgeClampSpeciesV
+      .map((x, ind) => (x ? speciesToChannelChar(listOfSpecies[ind]) : ""))
+      .join("");
+    const clampShaderH = clampChannelsH
+      ? clampSpeciesToEdgeShader("H").replaceAll(/\bSPECIES\b/g, clampChannelsH)
+      : "";
+    const clampShaderV = clampChannelsV
+      ? clampSpeciesToEdgeShader("V").replaceAll(/\bSPECIES\b/g, clampChannelsV)
+      : "";
+
+    // Edge clamp the simulation textures in a direction if every species needs clamping in
+    // it, and otherwise let them wrap, for periodicity. If only some species need clamping,
+    // we'll do it in the shader.
+    const clampH = edgeClampSpeciesH.every((x) => x);
+    const clampV = edgeClampSpeciesV.every((x) => x);
+    setStateTextureWrapping(
+      clampH ? THREE.ClampToEdgeWrapping : THREE.RepeatWrapping,
+      clampV ? THREE.ClampToEdgeWrapping : THREE.RepeatWrapping,
+    );
+    if (!clampH) clampShader += clampShaderH;
+    if (!clampV) clampShader += clampShaderV;
 
     // Using the constructed shader parts, we'll form fragment shaders for every possible timestepping scheme.
     let middle = [
@@ -5832,7 +5919,14 @@ async function VisualPDE(url) {
     }
     shaderContainsRAND = containsRAND || containsRANDN;
     shaderContainsGlobalIntegral = /\bglobalIntegralValue[1-4]\b/.test(middle);
-    let bot = [dirichletShader, algebraicShader, RDShaderBot()].join(" ");
+    // The Dirichlet code is wrapped per timestepping pass (see RDShaderDirichletForStage), so
+    // each pass's "bot" is assembled in the loop below.
+    const bot = (type) =>
+      [
+        RDShaderDirichletForStage(type, dirichletShader),
+        algebraicShader,
+        RDShaderBot(),
+      ].join(" ");
 
     // MRT (>4-species) path, used by every timestepping scheme once numGroups>1 (Stage 13 of
     // the 8-species upgrade extended this from Forward-Euler-only to all 8 scheme
@@ -5912,7 +6006,8 @@ async function VisualPDE(url) {
       }
 
       middleMRT = [
-        clampShader,
+        // mrtSimTextures always wrap, so species 1-4 are always clamped in the shader.
+        clampShaderH + clampShaderV,
         clampShaderGroup1,
         RDShaderAdvectionPreBC(),
         RDShaderDiffusionPreBC(),
@@ -5936,13 +6031,17 @@ async function VisualPDE(url) {
       // come from) is identical whether it ends up embedded in `middle` or `middleMRT`.
       if (containsRAND) middleMRT = randShader() + middleMRT;
       if (containsRANDN) middleMRT = randNShader() + middleMRT;
-      botMRT = [
-        dirichletShader,
-        bcGroup1.dirichletShader,
-        algebraicShader,
-        algebraicShaderGroup1,
-        RDShaderBotMRT(),
-      ].join(" ");
+      botMRT = (type) =>
+        [
+          RDShaderDirichletForStage(
+            type,
+            dirichletShader + bcGroup1.dirichletShader,
+            true,
+          ),
+          algebraicShader,
+          algebraicShaderGroup1,
+          RDShaderBotMRT(),
+        ].join(" ");
     }
 
     // Build every timestepping scheme's material (AB2/Mid/RK4's MRT support added when the
@@ -5963,7 +6062,7 @@ async function VisualPDE(url) {
                 RDShaderTopMRT(type),
                 middleMRT,
                 insertRates(RDShaderMainMRT(type)),
-                botMRT,
+                botMRT(type),
               ].join(" "),
             ),
           );
@@ -5977,7 +6076,7 @@ async function VisualPDE(url) {
                 RDShaderTop(type),
                 middle,
                 insertRates(RDShaderMain(type)),
-                bot,
+                bot(type),
               ].join(" "),
             ),
           );
@@ -9718,16 +9817,11 @@ async function VisualPDE(url) {
   }
 
   function configureManualInterpolation() {
+    // Only the display textures change: simulation textures always use nearest filtering.
     if (isManuallyInterpolating()) {
-      simTextures.forEach((simTex) => {
-        simTex.texture.magFilter = THREE.NearestFilter;
-      });
       postTexture.texture.magFilter = THREE.NearestFilter;
       interpolationTexture.texture.magFilter = THREE.NearestFilter;
     } else {
-      simTextures.forEach((simTex) => {
-        simTex.texture.magFilter = THREE.LinearFilter;
-      });
       postTexture.texture.magFilter = THREE.LinearFilter;
       interpolationTexture.texture.magFilter = THREE.LinearFilter;
     }
@@ -9811,6 +9905,7 @@ async function VisualPDE(url) {
     let str = RDShaderTop() + RDShaderUpdateCross() + auxiliary_GLSL_funs();
     let reserved = [...str.matchAll(regex)]
       .map((x) => x[1])
+      .concat(getShaderReservedNames())
       .concat(exclusions)
       .concat([
         "I_T",
@@ -9827,8 +9922,130 @@ async function VisualPDE(url) {
     return reserved;
   }
 
+  // The names a parameter's uniform would collide with in the shaders it's declared in (see
+  // kineticUniformsForShader): GLSL's reserved words, everything declared at the shaders'
+  // global scope or in their main(), where the user's expressions are evaluated (a
+  // parameter would be shadowed there), and the placeholders main.js substitutes into them.
+  // Names local to the shaders' other functions are left free. Computed once, as the
+  // templates are fixed, in shaderReservedNames.
+  function getShaderReservedNames() {
+    if (shaderReservedNames) return shaderReservedNames;
+    // GLSL ES 3.00's keywords, reserved words and built-in functions, which can't be redeclared
+    // as a parameter's uniform.
+    const glslReservedWords = (
+      "attribute const uniform varying layout centroid flat smooth noperspective break " +
+      "continue do for while switch case default if else in out inout float int void bool " +
+      "true false invariant discard return mat2 mat3 mat4 mat2x2 mat2x3 mat2x4 mat3x2 mat3x3 " +
+      "mat3x4 mat4x2 mat4x3 mat4x4 vec2 vec3 vec4 ivec2 ivec3 ivec4 bvec2 bvec3 bvec4 uint " +
+      "uvec2 uvec3 uvec4 lowp mediump highp precision sampler2D sampler3D samplerCube " +
+      "sampler2DShadow samplerCubeShadow sampler2DArray sampler2DArrayShadow isampler2D " +
+      "isampler3D isamplerCube isampler2DArray usampler2D usampler3D usamplerCube " +
+      "usampler2DArray struct coherent volatile restrict readonly writeonly resource " +
+      "atomic_uint patch sample subroutine common partition active asm class union enum " +
+      "typedef template this goto inline noinline public static extern external interface " +
+      "long short double half fixed unsigned superp input output hvec2 hvec3 hvec4 dvec2 " +
+      "dvec3 dvec4 fvec2 fvec3 fvec4 sampler3DRect filter image1D image2D image3D imageCube " +
+      "iimage1D iimage2D iimage3D iimageCube uimage1D uimage2D uimage3D uimageCube " +
+      "image1DArray image2DArray iimage1DArray iimage2DArray uimage1DArray uimage2DArray " +
+      "imageBuffer iimageBuffer uimageBuffer sampler1D sampler1DShadow sampler1DArray " +
+      "sampler1DArrayShadow isampler1D isampler1DArray usampler1D usampler1DArray " +
+      "sampler2DRect sampler2DRectShadow isampler2DRect usampler2DRect samplerBuffer " +
+      "isamplerBuffer usamplerBuffer sampler2DMS isampler2DMS usampler2DMS sampler2DMSArray " +
+      "isampler2DMSArray usampler2DMSArray sizeof cast namespace using " +
+      "radians degrees sin cos tan asin acos atan sinh cosh tanh asinh acosh atanh pow exp " +
+      "log exp2 log2 sqrt inversesqrt abs sign floor trunc round roundEven ceil fract mod " +
+      "modf min max clamp mix step smoothstep isnan isinf floatBitsToInt floatBitsToUint " +
+      "intBitsToFloat uintBitsToFloat packSnorm2x16 unpackSnorm2x16 packUnorm2x16 " +
+      "unpackUnorm2x16 packHalf2x16 unpackHalf2x16 length distance dot cross normalize " +
+      "faceforward reflect refract matrixCompMult outerProduct transpose determinant " +
+      "inverse lessThan lessThanEqual greaterThan greaterThanEqual equal notEqual any all " +
+      "not textureSize texture textureProj textureLod textureOffset texelFetch " +
+      "texelFetchOffset textureProjOffset textureLodOffset textureProjLod " +
+      "textureProjLodOffset textureGrad textureGradOffset textureProjGrad " +
+      "textureProjGradOffset texture2D dFdx dFdy fwidth"
+    ).split(" ");
+    const declaration =
+      /\b(?:float|int|bool|vec\d|ivec\d|bvec\d|mat\d|sampler2D|void)\s+(\w+)\b/g;
+    const schemeStages = [
+      "FE",
+      "AB2",
+      "Mid1",
+      "Mid2",
+      "RK41",
+      "RK42",
+      "RK43",
+      "RK44",
+    ];
+    // RDShaderTop(MRT) ends inside computeRHS, where the reaction terms are evaluated, so
+    // all of it counts.
+    const names = new Set(
+      glslReservedWords.concat(["main", "MINX", "MINY", "ind"]),
+    );
+    for (const stage of schemeStages) {
+      for (const top of [RDShaderTop(stage), RDShaderTopMRT(stage)]) {
+        for (const match of top.matchAll(declaration)) names.add(match[1]);
+      }
+    }
+    const shaders = [
+      ...schemeStages.map(RDShaderMain),
+      ...schemeStages.map(RDShaderMainMRT),
+      RDShaderUpdateCross(),
+      RDShaderBot(),
+      RDShaderEnforceDirichletTop(),
+      auxiliary_GLSL_funs(),
+      clearShaderTop(),
+      clearShaderTopMRT(),
+      drawShaderTop(),
+      drawShaderTopMRT(),
+      fiveColourDisplayTop(),
+      fiveColourDisplayTopMRT(),
+      // Spliced into the display shader's main().
+      embossShader(),
+      contourShader(),
+      overlayShader(),
+      overlayShaderMRT(),
+      computeDisplayFunShaderTop() + computeDisplayFunShaderMid(),
+      computeDisplayFunShaderTopMRT() + computeDisplayFunShaderMidMRT(),
+      probeShader(),
+      probeShaderMRT(),
+      globalIntegralShader(),
+      globalIntegralShaderMRT(),
+    ];
+    for (const shader of shaders) {
+      for (const match of shaderOutsideHelperFunctions(shader).matchAll(
+        declaration,
+      )) {
+        names.add(match[1]);
+      }
+    }
+    shaderReservedNames = [...names];
+    return shaderReservedNames;
+  }
+
+  // The text of a shader that's at global scope or in main(), without comments or functions'
+  // parameters (which are local to them).
+  function shaderOutsideHelperFunctions(shader) {
+    const code = shader
+      .replace(/\/\/.*$/gm, "")
+      .replace(/\/\*[\s\S]*?\*\//g, "");
+    let depth = 0;
+    let inMain = false;
+    let header = "";
+    let out = "";
+    for (const c of code) {
+      if (depth == 0 && c == "{") inMain = /\bmain\s*\(\s*\)\s*$/.test(header);
+      if (depth == 0 || inMain) out += c;
+      if (depth == 0) header = c == ";" || c == "{" ? "" : header + c;
+      if (c == "{") depth++;
+      if (c == "}" && --depth == 0) inMain = false;
+    }
+    return out.replace(/\([^()]*\)\s*\{/g, "() {");
+  }
+
   function isReservedName(name, exclusions) {
     if (exclusions == undefined) exclusions = [];
+    // GLSL reserves names beginning gl_ or containing two underscores in a row.
+    if (/^gl_|__/.test(name)) return true;
     return getReservedStrs(exclusions).some(function (badName) {
       let regex = new RegExp("\\b" + badName + "\\b", "g");
       return regex.test(name);
@@ -10289,7 +10506,59 @@ async function VisualPDE(url) {
       .replaceAll(/\W+/g, " ")
       .trim()
       .split(" ")
+      .filter((name) => name.length)
       .slice(0, defaultSpecies.length);
+  }
+
+  /**
+   * Checks a list of species names, returning a message describing the first problem found.
+   * @param {string[]} newSpecies - The names supplied by the user.
+   * @param {string[]} allSpecies - The full list of names, including placeholders for unnamed species.
+   * @returns {string|null} The error message, or null if the names are valid.
+   */
+  function getSpeciesNamesError(newSpecies, allSpecies) {
+    if (newSpecies.length == 0) {
+      return "Please give at least one species name, with names separated by spaces (e.g. 'u v').";
+    }
+    // Names are swapped as whole words in every expression and used in the shaders, so must be identifiers.
+    const badName = newSpecies.find((name) => !/^[a-zA-Z]\w*$/.test(name));
+    if (badName != undefined) {
+      return (
+        "The name '" +
+        badName +
+        "' can't be used as a species name. Names must start with a letter and contain only letters, numbers and underscores."
+      );
+    }
+    const duplicate = allSpecies.find(
+      (name, ind) => allSpecies.indexOf(name) != ind,
+    );
+    if (duplicate != undefined) {
+      return (
+        "The name '" +
+        duplicate +
+        "' has been given to more than one species. Please give each species a different name."
+      );
+    }
+    // Check if any reserved names have been used.
+    const kinParamNames = getKineticParamNames();
+    const reservedName = allSpecies.find((name) =>
+      isReservedName(name, kinParamNames),
+    );
+    if (reservedName != undefined) {
+      const message = kinParamNames.includes(reservedName)
+        ? "as a parameter"
+        : "under the hood";
+      return (
+        "The name '" +
+        reservedName +
+        "' is used " +
+        message +
+        ", so can't be used as a species name. Please use a different name for " +
+        reservedName +
+        "."
+      );
+    }
+    return null;
   }
 
   function speciesNamesToString() {
@@ -10309,31 +10578,26 @@ async function VisualPDE(url) {
     const newSpecies = parseSpeciesNamesFromOptions();
 
     // If not enough species have been provided, add placeholders for those remaining.
-    const tempListOfSpecies = newSpecies.concat(
+    let tempListOfSpecies = newSpecies.concat(
       placeholderSp.slice(newSpecies.length),
     );
 
-    // Check if any reserved names have been used, and stop if so.
-    const kinParamNames = getKineticParamNames();
-    let message;
-    for (var ind = 0; ind < tempListOfSpecies.length; ind++) {
-      if (isReservedName(tempListOfSpecies[ind], kinParamNames)) {
-        if (kinParamNames.includes(tempListOfSpecies[ind])) {
-          message = "as a parameter";
-        } else {
-          message = "under the hood";
-        }
-        throwError(
-          "The name '" +
-            tempListOfSpecies[ind] +
-            "' is used " +
-            message +
-            ", so can't be used as a species name. Please use a different name for " +
-            tempListOfSpecies[ind] +
-            ".",
-        );
+    // Check that the names are usable, and stop if not.
+    const errorMessage = getSpeciesNamesError(newSpecies, tempListOfSpecies);
+    if (errorMessage) {
+      throwError(errorMessage);
+      if (oldListOfSpecies != undefined && !isLoading) {
+        // Put the last valid names back in the GUI, leaving every other option untouched.
+        options.speciesNames = speciesNamesToString();
+        if (controllers["speciesNames"])
+          controllers["speciesNames"].updateDisplay();
         return;
       }
+      // When loading, the previous names have nothing to do with the new options, so use the defaults.
+      options.speciesNames = defaultSpecies
+        .slice(0, options.numSpecies)
+        .join(" ");
+      tempListOfSpecies = defaultSpecies.slice();
     }
 
     // Now that we know all the names are valid, assign the names to the global variables.
@@ -10474,12 +10738,15 @@ async function VisualPDE(url) {
    */
   function replaceSymbolsInStr(str, originals, replacements, optional) {
     if (optional == undefined) optional = "";
+    // Delimit the placeholders with private-use characters so that they can't clash with user text.
     const placeholders = new Array(originals.length)
       .fill(0)
-      .map((x, i) => "PLACE" + i.toString());
+      .map((x, i) => "\uE000" + i.toString() + "\uE001");
     let regex;
     // Substitute in placeholders first.
     for (var ind = 0; ind < originals.length; ind++) {
+      // An empty original would match at every word boundary.
+      if (!originals[ind]) continue;
       regex = new RegExp(
         "\\b(" + originals[ind] + ")(" + optional + ")?\\b",
         "g",
@@ -10488,11 +10755,7 @@ async function VisualPDE(url) {
     }
     // Now swap the placeholders for the new reactions.
     for (var ind = 0; ind < placeholders.length; ind++) {
-      regex = new RegExp(
-        "\\b(" + placeholders[ind] + ")(" + optional + ")?\\b",
-        "g",
-      );
-      str = str.replaceAll(regex, replacements[ind] + "$2");
+      str = str.replaceAll(placeholders[ind], replacements[ind]);
     }
     return str;
   }
@@ -10731,7 +10994,7 @@ async function VisualPDE(url) {
       const prevMaterial = simDomain.material;
       const prevTarget = renderer.getRenderTarget();
       const scratch = postTexture.clone();
-      assignFragmentShader(copyMaterial, copyShader());
+      assignFragmentShader(copyMaterial, exactCopyShader());
       copyMaterial.glslVersion = null;
       copyMaterial.needsUpdate = true;
       simDomain.material = copyMaterial;
@@ -10804,8 +11067,12 @@ async function VisualPDE(url) {
     // [header + group-0 buffer] signals its presence on load (see loadSimState), so this
     // stays backward compatible with files exported before the 8-species upgrade without a
     // format version bump.
-    const parts = [new Float32Array([nXDisc, nYDisc]), stateBuffer];
-    if (stateBufferGroup1 != undefined) parts.push(stateBufferGroup1);
+    // The checkpoint's own data and size (whether set here or imported), which needn't be
+    // the grid's now.
+    const { width, height, data } = checkpointTexture.image;
+    const parts = [new Float32Array([width, height]), data];
+    if (checkpointTextureGroup1 != null)
+      parts.push(checkpointTextureGroup1.image.data);
     var link = document.createElement("a");
     link.download = "VisualPDEState";
     link.href = URL.createObjectURL(new Blob(parts));
@@ -13049,8 +13316,9 @@ async function VisualPDE(url) {
    * @returns {string} The modified string.
    */
   function replaceWhiteNoise(str) {
-    // Replace WhiteNoise with RANDN*sqrt(1/(dt*dx^dim)), where dim is dimension.
-    let dxStr = options.dimension == 1 ? "dx" : "safepow(dx,2)";
+    // Replace WhiteNoise with RANDN*sqrt(1/(dt*V)), where V is the length (in 1D) or area (in
+    // 2D) of a node's cell.
+    let dxStr = options.dimension == 1 ? "dx" : "(dx*dy)";
     str = str.replaceAll(
       /\bWhiteNoise(_1)?\b/g,
       "sqrt(1/(dt*" + dxStr + "))*RANDN",

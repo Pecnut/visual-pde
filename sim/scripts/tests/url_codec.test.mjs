@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import fs from "node:fs";
 import { encodeOptions, decodeOptions } from "../RD/url_codec.js";
 import { minifyPreset } from "../RD/minify_preset.js";
 import {
@@ -11,17 +10,17 @@ import {
 } from "../RD/presets.js";
 import { LZString } from "../lz-string.min.js";
 
-// The data that links in format v1 depend on. If this fails, url_codec_v1_data.js has been
-// changed, which would break existing links: revert it, and add a new format instead.
-test("url_codec_v1_data.js is unchanged", () => {
+// The data that links in format v1 depend on. If this fails, url_codec_v1_data.js's data has
+// been changed, which would break existing links: revert it, and add a new format instead.
+// The data is hashed, rather than the file, so that reformatting the file doesn't count.
+test("url_codec_v1_data.js is unchanged", async () => {
+  const data = await import("../RD/url_codec_v1_data.js");
   const hash = createHash("sha256")
-    .update(
-      fs.readFileSync(new URL("../RD/url_codec_v1_data.js", import.meta.url)),
-    )
+    .update(JSON.stringify(Object.keys(data).sort().map((k) => [k, data[k]])))
     .digest("hex");
   assert.equal(
     hash,
-    "382124daaf5402c1d186f6fd2ef8123e40cdf997a69ef739c6c9cf770b8936ef",
+    "a697321a2310bf07de94bc713da10f36600a2eb63211dfd751e31fc3d23c9983",
   );
 });
 

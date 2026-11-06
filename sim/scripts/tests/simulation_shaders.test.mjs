@@ -18,6 +18,7 @@ import {
   RDShaderRobinCustomDomainX,
   RDShaderRobinCustomDomainY,
   RDShaderAlgebraicSpecies,
+  RDShaderDirichletForStage,
   RDShaderDirichletX,
   RDShaderDirichletY,
   RDShaderBot,
@@ -128,6 +129,48 @@ test("clampSpeciesToEdgeShader: 'H' includes x-direction clamps, 'V' includes y-
   assert.equal(clampSpeciesToEdgeShader(""), "");
 });
 
+test("clampSpeciesToEdgeShader: every neighbour, including LL/RR/TT/BB, gets its clamped value", () => {
+  // Run the shader as JS on each node of an n x m grid whose neighbours were fetched with
+  // wrapping, and check it leaves every neighbour as the node at the clamped index.
+  const n = 6;
+  const m = 5;
+  const code = clampSpeciesToEdgeShader("HV").replaceAll(".SPECIES", "");
+  const run = new Function(
+    "textureCoords",
+    "step_x",
+    "step_y",
+    "uvwq",
+    "uvwqL",
+    "uvwqR",
+    "uvwqT",
+    "uvwqB",
+    "uvwqLL",
+    "uvwqRR",
+    "uvwqTT",
+    "uvwqBB",
+    `${code}; return {uvwqL, uvwqR, uvwqT, uvwqB, uvwqLL, uvwqRR, uvwqTT, uvwqBB};`,
+  );
+  const value = (i, j) => 100 * j + i;
+  const wrap = (k, len) => ((k % len) + len) % len;
+  const clamp = (k, len) => Math.min(Math.max(k, 0), len - 1);
+  const offsets = { L: [-1, 0], R: [1, 0], T: [0, 1], B: [0, -1], LL: [-2, 0], RR: [2, 0], TT: [0, 2], BB: [0, -2] };
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < m; j++) {
+      const at = (f, [di, dj]) => value(f(i + di, n), f(j + dj, m));
+      const out = run(
+        { x: (i + 0.5) / n, y: (j + 0.5) / m },
+        1 / n,
+        1 / m,
+        value(i, j),
+        ...["L", "R", "T", "B", "LL", "RR", "TT", "BB"].map((d) => at(wrap, offsets[d])),
+      );
+      for (const d of Object.keys(offsets)) {
+        assert.equal(out["uvwq" + d], at(clamp, offsets[d]), `node (${i}, ${j}), neighbour ${d}`);
+      }
+    }
+  }
+});
+
 test("RDShaderAlgebraicSpecies/RDShaderDirichletX/Y/RDShaderBot/RDShaderPeriodic: non-empty (or intentionally empty) fixed snippets", () => {
   assert.match(RDShaderAlgebraicSpecies(), /RHS\.SPECIES/);
   assert.notEqual(RDShaderDirichletX(), "");
@@ -149,6 +192,77 @@ test("RDShaderTopMRT/RDShaderMainMRT: return non-empty text for each scheme type
   for (const type of types) {
     assert.ok(RDShaderTopMRT(type).length > 0, `RDShaderTopMRT(${type})`);
     assert.ok(RDShaderMainMRT(type).length > 0, `RDShaderMainMRT(${type})`);
+  }
+});
+
+// The algebraic-species block (RDShaderAlgebraicSpecies, and its groupified copy for species
+// 5-8) is appended after every scheme stage and reads timescales/timescalesGroup1, so every
+// stage must declare them or the shader fails to compile.
+test("RDShaderMain/RDShaderMainMRT: every scheme stage declares the timescales the algebraic block reads", () => {
+  const types = ["FE", "AB2", "Mid1", "Mid2", "RK41", "RK42", "RK43", "RK44"];
+  for (const type of types) {
+    assert.match(RDShaderMain(type), /vec4 timescales = TIMESCALES;/, `RDShaderMain(${type})`);
+    const mrt = RDShaderMainMRT(type);
+    assert.match(mrt, /vec4 timescales = TIMESCALES;/, `RDShaderMainMRT(${type})`);
+    assert.match(mrt, /vec4 timescalesGroup1 = TIMESCALESGROUP1;/, `RDShaderMainMRT(${type})`);
+  }
+});
+
+// Midpoint/RK4 stage slopes are combined into intermediate states (u + c*dt*k), so they must
+// be du/dt itself, i.e. RHS divided by the timescales, or those schemes lose their order of
+// accuracy whenever a timescale isn't 1.
+test("RDShaderMain/RDShaderMainMRT: Midpoint/RK4 stage slopes are divided by the timescales", () => {
+  for (const type of ["Mid1", "RK41", "RK42", "RK43"]) {
+    assert.match(RDShaderMain(type), /updated = RHS \/ timescales;/, `RDShaderMain(${type})`);
+    const mrt = RDShaderMainMRT(type);
+    assert.match(mrt, /updated = RHS \/ timescales;/, `RDShaderMainMRT(${type})`);
+    assert.match(mrt, /updated2 = RHS2 \/ timescalesGroup1;/, `RDShaderMainMRT(${type})`);
+  }
+  // RK44 undoes the division on the stored slopes so the final update divides only once.
+  assert.match(RDShaderMain("RK44"), /RHS = \(timescales \* \(texture2D\(textureSource1/);
+  assert.match(RDShaderMainMRT("RK44"), /RHS = \(timescales \* \(texture2D\(textureSource1,/);
+  assert.match(RDShaderMainMRT("RK44"), /RHS2 = \(timescalesGroup1 \* \(texture2D\(textureSource1Group1/);
+});
+
+// computeRHS takes the time explicitly (shadowing the uniform t), so that AB2 can evaluate
+// its previous RHS at the previous time rather than the current one.
+test("RDShaderTop/RDShaderMain (+MRT): computeRHS takes the time, and AB2's previous RHS uses t - dt", () => {
+  assert.match(RDShaderTop("FE"), /void computeRHS\(sampler2D textureSource, float t,/);
+  assert.match(RDShaderTopMRT("FE"), /void computeRHS\(sampler2D textureSource, float t,/);
+  const types = ["FE", "AB2", "Mid1", "Mid2", "RK41", "RK42", "RK43", "RK44"];
+  for (const type of types) {
+    for (const main of [RDShaderMain(type), RDShaderMainMRT(type)]) {
+      const calls = [...main.matchAll(/computeRHS\(\w+, ([^,]+),/g)].map((m) => m[1]);
+      const expected = type == "AB2" ? ["t", "t - dt"] : ["t"];
+      assert.deepEqual(calls, expected, type);
+    }
+  }
+});
+
+test("RDShaderDirichletForStage: no Dirichlet code means no wrapper", () => {
+  assert.equal(RDShaderDirichletForStage("RK41", " \n "), "");
+});
+
+test("RDShaderDirichletForStage: boundary values are evaluated at the time of the state each pass produces", () => {
+  const offsets = { FE: "dt", AB2: "dt", Mid1: "0.5*dt", Mid2: "0.5*dt", RK41: "0.5*dt", RK42: "0.0", RK43: "0.5*dt", RK44: "0.0" };
+  for (const [type, offset] of Object.entries(offsets)) {
+    const shader = RDShaderDirichletForStage(type, "updated.r = g;");
+    assert.ok(shader.includes(`float tDirichlet = t + ${offset};`), type);
+    assert.match(shader, /\{\s*float t = tDirichlet;\s*updated\.r = g;\s*\}/, type);
+  }
+});
+
+test("RDShaderDirichletForStage: stage-slope passes apply the condition to the intermediate state and recover the slope", () => {
+  const coefficients = { Mid1: "0.5", RK41: "0.5", RK42: "0.5", RK43: "1.0" };
+  for (const [type, c] of Object.entries(coefficients)) {
+    const shader = RDShaderDirichletForStage(type, "updated.r = g;");
+    assert.ok(shader.includes(`updated = stageBase + ${c}*dt*stageSlope;`), type);
+    assert.ok(shader.includes(`updated = mix(stageSlope, (updated - stageBase) / (${c}*dt), vec4(notEqual(updated, stageState)));`), type);
+    assert.ok(!shader.includes("updated2"), type);
+    assert.ok(RDShaderDirichletForStage(type, "updated.r = g;", true).includes(`updated2 = stage2Base + ${c}*dt*stage2Slope;`), type);
+  }
+  for (const type of ["FE", "AB2", "Mid2", "RK44"]) {
+    assert.ok(!RDShaderDirichletForStage(type, "updated.r = g;", true).includes("Slope"), type);
   }
 });
 

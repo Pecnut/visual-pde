@@ -252,6 +252,31 @@ test("parseSpeciesNamesFromOptions/speciesNamesToString: split options.speciesNa
   assert.equal(m.speciesNamesToString(), "u v"); // pruned to the first numSpecies=2
 });
 
+test("parseSpeciesNamesFromOptions: blank or punctuation-only names give no species, not an empty name", () => {
+  m.__setState({ defaultSpecies: ["u", "v", "w", "q", "u5", "u6", "u7", "u8"] });
+  for (const speciesNames of ["", "   ", "!?", " , "]) {
+    m.__setState({ options: { speciesNames } });
+    assert.deepEqual(m.parseSpeciesNamesFromOptions(), [], JSON.stringify(speciesNames));
+  }
+});
+
+test("getSpeciesNamesError: rejects missing, non-identifier, duplicate and reserved names", () => {
+  m.__setState({
+    getKineticParamNames: () => ["a"],
+    isReservedName: (name, exclusions) => name == "dt" || exclusions.includes(name),
+  });
+  const check = (names) => m.getSpeciesNamesError(names, names.concat(["VARIABLE3"]));
+  assert.equal(check(["u", "v"]), null);
+  assert.equal(check(["u_1", "Prey2"]), null);
+  assert.match(check([]), /at least one species name/);
+  assert.match(check(["2", "v"]), /'2' can't be used/);
+  assert.match(check(["u", "1v"]), /'1v' can't be used/);
+  assert.match(check(["_u"]), /'_u' can't be used/);
+  assert.match(check(["u", "u"]), /'u' has been given to more than one species/);
+  assert.match(check(["a"]), /'a' is used as a parameter/);
+  assert.match(check(["dt"]), /'dt' is used under the hood/);
+});
+
 test("checkForAnyDirichletBCs: true if any of the 8 boundary-condition slots is Dirichlet (direct or via a combo string), or if the domain is defined via an indicator function", () => {
   const base = {
     domainViaIndicatorFun: false,

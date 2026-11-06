@@ -103,8 +103,10 @@ export function computeDisplayFunShaderMid() {
         if (overlayLine) {
           height = OVERLAYEXPR;
         }
+        // Runtime +inf: a constant 1.0/0.0 is folded by ANGLE into uintBitsToFloat(), which
+        // fails to compile on some drivers (e.g. Firefox/Linux/NVIDIA, pre-GLSL 330).
         if (isnan(value)) {
-          value = 1.0/0.0;
+          value = 1.0 / (0.0 * gl_FragCoord.x);
         }
         gl_FragColor = vec4(value, 0.0, height, yVecComp);`;
 }
@@ -236,29 +238,32 @@ export function interpolationShader() {
 }
 
 export function minMaxShader() {
-  return `varying vec2 textureCoords; 
+  return `varying vec2 textureCoords;
     uniform sampler2D textureSource;
     uniform vec2 srcResolution;
     uniform bool firstFlag;
-    
+
     void main()
     {
-      // Get the min and max of the nearby pixels in the texture source.
-      // Step of one pixel in the source texture.
-      vec2 onePixel = vec2(1) / srcResolution;
-      vec2 uv = textureCoords - 0.5*onePixel;
-        
+      // The min and max of the 2x2 block of source texels that this texel reduces. The
+      // texels are found by index, as each reduction texture is half the size of its
+      // source rounded up, so normalised coordinates don't line up with the blocks when a
+      // size is odd (and texels would be skipped).
+      ivec2 outTexel = ivec2(gl_FragCoord.xy);
       float minVal = 1e38;
       float maxVal = -1e38;
       vec2 vals;
       for (int y = 0; y < 2; ++y) {
         for (int x = 0; x < 2; ++x) {
-          vals = texture2D(textureSource, uv + vec2(x, y) * onePixel).rg;
-          if (firstFlag) { 
-            vals.g = vals.r;
+          ivec2 srcTexel = outTexel * 2 + ivec2(x, y);
+          if (srcTexel.x < int(srcResolution.x) && srcTexel.y < int(srcResolution.y)) {
+            vals = texture2D(textureSource, (vec2(srcTexel) + 0.5) / srcResolution).rg;
+            if (firstFlag) {
+              vals.g = vals.r;
+            }
+            minVal = min(minVal, vals.r);
+            maxVal = max(maxVal, vals.g);
           }
-          minVal = min(minVal, vals.r);
-          maxVal = max(maxVal, vals.g);
         }
       }
       gl_FragColor = vec4(minVal, maxVal, 0.0, 0.0);
@@ -347,15 +352,15 @@ export function probeShader() {
       vec2 probeTexCoordsBB = probeTexCoordsB + vec2(0.0, -step_y);
 
       // Sample.
-      vec4 uvwq = texture2D(textureSource, probeTexCoords);
-      vec4 uvwqL = texture2D(textureSource, probeTexCoordsL);
-      vec4 uvwqR = texture2D(textureSource, probeTexCoordsR);
-      vec4 uvwqT = texture2D(textureSource, probeTexCoordsT);
-      vec4 uvwqB = texture2D(textureSource, probeTexCoordsB);
-      vec4 uvwqLL = texture2D(textureSource, probeTexCoordsLL);
-      vec4 uvwqRR = texture2D(textureSource, probeTexCoordsRR);
-      vec4 uvwqTT = texture2D(textureSource, probeTexCoordsTT);
-      vec4 uvwqBB = texture2D(textureSource, probeTexCoordsBB);
+      vec4 uvwq = textureBilinear(textureSource, probeTexCoords);
+      vec4 uvwqL = textureBilinear(textureSource, probeTexCoordsL);
+      vec4 uvwqR = textureBilinear(textureSource, probeTexCoordsR);
+      vec4 uvwqT = textureBilinear(textureSource, probeTexCoordsT);
+      vec4 uvwqB = textureBilinear(textureSource, probeTexCoordsB);
+      vec4 uvwqLL = textureBilinear(textureSource, probeTexCoordsLL);
+      vec4 uvwqRR = textureBilinear(textureSource, probeTexCoordsRR);
+      vec4 uvwqTT = textureBilinear(textureSource, probeTexCoordsTT);
+      vec4 uvwqBB = textureBilinear(textureSource, probeTexCoordsBB);
 
       // Compute derivatives.
       vec4 uvwqX = (uvwqR - uvwqL) / (2.0*dx);
@@ -389,15 +394,15 @@ export function probeShaderMRT() {
     .replace(
       "      // Compute derivatives.",
       `      // Sample (group 1).
-      vec4 uvwq2 = texture2D(textureSourceGroup1, probeTexCoords);
-      vec4 uvwq2L = texture2D(textureSourceGroup1, probeTexCoordsL);
-      vec4 uvwq2R = texture2D(textureSourceGroup1, probeTexCoordsR);
-      vec4 uvwq2T = texture2D(textureSourceGroup1, probeTexCoordsT);
-      vec4 uvwq2B = texture2D(textureSourceGroup1, probeTexCoordsB);
-      vec4 uvwq2LL = texture2D(textureSourceGroup1, probeTexCoordsLL);
-      vec4 uvwq2RR = texture2D(textureSourceGroup1, probeTexCoordsRR);
-      vec4 uvwq2TT = texture2D(textureSourceGroup1, probeTexCoordsTT);
-      vec4 uvwq2BB = texture2D(textureSourceGroup1, probeTexCoordsBB);
+      vec4 uvwq2 = textureBilinear(textureSourceGroup1, probeTexCoords);
+      vec4 uvwq2L = textureBilinear(textureSourceGroup1, probeTexCoordsL);
+      vec4 uvwq2R = textureBilinear(textureSourceGroup1, probeTexCoordsR);
+      vec4 uvwq2T = textureBilinear(textureSourceGroup1, probeTexCoordsT);
+      vec4 uvwq2B = textureBilinear(textureSourceGroup1, probeTexCoordsB);
+      vec4 uvwq2LL = textureBilinear(textureSourceGroup1, probeTexCoordsLL);
+      vec4 uvwq2RR = textureBilinear(textureSourceGroup1, probeTexCoordsRR);
+      vec4 uvwq2TT = textureBilinear(textureSourceGroup1, probeTexCoordsTT);
+      vec4 uvwq2BB = textureBilinear(textureSourceGroup1, probeTexCoordsBB);
 
       // Compute derivatives (group 1).
       vec4 uvwq2X = (uvwq2R - uvwq2L) / (2.0*dx);

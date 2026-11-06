@@ -327,7 +327,9 @@ function rewriteImportSpecifier(statement) {
 
 function extractImports(headerText) {
   return splitTopLevelStatements(headerText)
-    .map((s) => s.trim())
+    // Without any comment before the statement (e.g. main.js's file header, before its first
+    // import), which would otherwise hide it.
+    .map((s) => stripLeadingCommentsAndWhitespace(s).trim())
     .filter((s) => s.startsWith("import "))
     .map(rewriteImportSpecifier);
 }

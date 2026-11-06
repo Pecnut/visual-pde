@@ -138,11 +138,11 @@ export function contourShader() {
 export function overlayShader() {
   return `float x = MINX + textureCoords.x * L_x;
   float y = MINY + textureCoords.y * L_y;
-  vec4 uvwq = texture2D(textureSource1, textureCoords);
-  vec4 uvwqL = texture2D(textureSource1, textureCoords + vec2(-step_x, 0.0));
-  vec4 uvwqR = texture2D(textureSource1, textureCoords + vec2(+step_x, 0.0));
-  vec4 uvwqT = texture2D(textureSource1, textureCoords + vec2(0.0, +step_y));
-  vec4 uvwqB = texture2D(textureSource1, textureCoords + vec2(0.0, -step_y));
+  vec4 uvwq = textureBilinear(textureSource1, textureCoords);
+  vec4 uvwqL = textureBilinear(textureSource1, textureCoords + vec2(-step_x, 0.0));
+  vec4 uvwqR = textureBilinear(textureSource1, textureCoords + vec2(+step_x, 0.0));
+  vec4 uvwqT = textureBilinear(textureSource1, textureCoords + vec2(0.0, +step_y));
+  vec4 uvwqB = textureBilinear(textureSource1, textureCoords + vec2(0.0, -step_y));
   vec4 uvwqX = (uvwqR - uvwqL) / (2.0*dx) * dxUpscaledScale;
   vec4 uvwqY = (uvwqT - uvwqB) / (2.0*dy) * dyUpscaledScale;
   vec4 uvwqXF = (uvwqR - uvwq) / dx * dxUpscaledScale;
@@ -173,11 +173,11 @@ export function fiveColourDisplayTopMRT() {
 export function overlayShaderMRT() {
   return overlayShader().replace(
     "float overlayExpr = OVERLAYEXPR;",
-    `vec4 uvwq2 = texture2D(textureSourceGroup1, textureCoords);
-  vec4 uvwq2L = texture2D(textureSourceGroup1, textureCoords + vec2(-step_x, 0.0));
-  vec4 uvwq2R = texture2D(textureSourceGroup1, textureCoords + vec2(+step_x, 0.0));
-  vec4 uvwq2T = texture2D(textureSourceGroup1, textureCoords + vec2(0.0, +step_y));
-  vec4 uvwq2B = texture2D(textureSourceGroup1, textureCoords + vec2(0.0, -step_y));
+    `vec4 uvwq2 = textureBilinear(textureSourceGroup1, textureCoords);
+  vec4 uvwq2L = textureBilinear(textureSourceGroup1, textureCoords + vec2(-step_x, 0.0));
+  vec4 uvwq2R = textureBilinear(textureSourceGroup1, textureCoords + vec2(+step_x, 0.0));
+  vec4 uvwq2T = textureBilinear(textureSourceGroup1, textureCoords + vec2(0.0, +step_y));
+  vec4 uvwq2B = textureBilinear(textureSourceGroup1, textureCoords + vec2(0.0, -step_y));
   vec4 uvwq2X = (uvwq2R - uvwq2L) / (2.0*dx) * dxUpscaledScale;
   vec4 uvwq2Y = (uvwq2T - uvwq2B) / (2.0*dy) * dyUpscaledScale;
   vec4 uvwq2XF = (uvwq2R - uvwq2) / dx * dxUpscaledScale;

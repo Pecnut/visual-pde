@@ -130,12 +130,12 @@ test("replaceUserDefDiff: special-cases 0/1/-1, otherwise wraps the input in the
   assert.equal(m.replaceUserDefDiff("FOO BAR", re(), "2*a", "[]"), "[2*a]BAR");
 });
 
-test("replaceWhiteNoise: substitutes WhiteNoise/WhiteNoise_2-4 with scaled RANDN terms, using dx (1D) or dx^2 (2D+)", () => {
+test("replaceWhiteNoise: substitutes WhiteNoise/WhiteNoise_2-4 with scaled RANDN terms, using dx (1D) or dx*dy (2D)", () => {
   m.__setState({ numsAsWords: ["zero", "one", "two", "three", "four", "five"] });
   m.__setState({ options: { dimension: 2 } });
   assert.equal(
     m.replaceWhiteNoise("WhiteNoise + WhiteNoise_2"),
-    "sqrt(1/(dt*safepow(dx,2)))*RANDN + sqrt(1/(dt*safepow(dx,2)))*RANDNTWO",
+    "sqrt(1/(dt*(dx*dy)))*RANDN + sqrt(1/(dt*(dx*dy)))*RANDNTWO",
   );
   m.__setState({ options: { dimension: 1 } });
   assert.equal(m.replaceWhiteNoise("WhiteNoise"), "sqrt(1/(dt*dx))*RANDN");
@@ -168,6 +168,22 @@ test("replaceSymbolsInStr: substitutes every whole-word original with its replac
     m.replaceSymbolsInStr("u_x + v", ["u", "v"], ["p", "q"], "_(?:[xy])"),
     "p_x + q",
   );
+});
+
+test("replaceSymbolsInStr: ignores empty originals rather than matching at every word boundary", () => {
+  const optional = "_(?:[xy][xybf]?)";
+  assert.equal(m.replaceSymbolsInStr("0", ["", "v"], ["u", "v"], optional), "0");
+  assert.equal(
+    m.replaceSymbolsInStr("L_x/2 - x", ["", "v"], ["u", "v"], optional),
+    "L_x/2 - x",
+  );
+  assert.equal(m.replaceSymbolsInStr("v_x + 1", ["", "v"], ["u", "w"], optional), "w_x + 1");
+});
+
+test("replaceSymbolsInStr: swaps names round, and leaves text resembling a placeholder alone", () => {
+  assert.equal(m.replaceSymbolsInStr("u - v", ["u", "v"], ["v", "u"]), "v - u");
+  assert.equal(m.replaceSymbolsInStr("PLACE0 + u", ["u"], ["a"]), "PLACE0 + a");
+  assert.equal(m.replaceSymbolsInStr("u1 + u10", ["u1", "u10"], ["a", "b"]), "a + b");
 });
 
 test("timescaleTag: species 1-4 use a letter suffix (matching timescaleTags), species 5-8 use a numeric suffix", () => {

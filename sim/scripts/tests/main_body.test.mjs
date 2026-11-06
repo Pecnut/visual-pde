@@ -406,6 +406,61 @@ test("reconcileGlobalIntegrals: scans brushRadius, minX, minY and timescale_1-8 
   }
 });
 
+// --- parseShaderString: ^ (powers) ------------------------------------------
+
+function setupPowerParsing() {
+  m.__setState({
+    options: { minX: "0", minY: "0", globalIntExprs: [null, null, null, null] },
+    listOfSpecies: ["u"],
+    listOfReactions: ["UFUN"],
+    expandedExpressionDefs: {},
+  });
+  m.genAnySpeciesRegexStrs();
+  return stubThrowError();
+}
+
+test("parseShaderString: small positive integer powers are unrolled into products rather than safepow", () => {
+  setupPowerParsing();
+  assert.equal(m.parseShaderString("u^2").trim(), "((uvwq.r)*(uvwq.r))");
+  assert.equal(m.parseShaderString("u^3.0").trim(), "((uvwq.r)*(uvwq.r)*(uvwq.r))");
+  assert.equal(m.parseShaderString("(u+1)^2").trim(), "(((uvwq.r+1.))*((uvwq.r+1.)))");
+});
+
+test("parseShaderString: non-integer, large or negative powers use safepow", () => {
+  setupPowerParsing();
+  assert.equal(m.parseShaderString("u^0.5").trim(), "safepow(uvwq.r,0.5)");
+  assert.equal(m.parseShaderString("u^7").trim(), "safepow(uvwq.r,7.)");
+});
+
+test("parseShaderString: a zero power (in any spelling) gives 1 rather than throwing", () => {
+  setupPowerParsing();
+  for (const zero of ["0", "0.0", "00"]) {
+    assert.equal(m.parseShaderString("u^" + zero).trim(), "1.", zero);
+  }
+});
+
+test("parseShaderString: a negated exponent is kept as the exponent, not dropped", () => {
+  setupPowerParsing();
+  assert.equal(m.parseShaderString("u^-1").trim(), "safepow(uvwq.r,-1.)");
+  assert.equal(m.parseShaderString("u^-0.5").trim(), "safepow(uvwq.r,-0.5)");
+});
+
+test("parseShaderString: species[x,y] lookups interpolate explicitly, since simulation textures use nearest filtering", () => {
+  m.__setState({
+    options: { minX: "0", minY: "0", globalIntExprs: [null, null, null, null] },
+    listOfSpecies: ["u", "v", "w", "q", "a"],
+    listOfReactions: ["UFUN", "VFUN", "WFUN", "QFUN", "UFUN5"],
+    expandedExpressionDefs: {},
+  });
+  stubThrowError();
+  m.genAnySpeciesRegexStrs();
+  assert.equal(
+    m.parseShaderString("v[1,2]").trim(),
+    "textureBilinear(textureSource, vec2((1.- 0. )/L_x,(2.- 0. )/L_y)).g",
+  );
+  assert.match(m.parseShaderString("a[x,y]"), /^ *textureBilinear\(textureSourceGroup1, /);
+});
+
 // --- parseShaderString / parseStringToTEX: Int(...) --------------------------
 
 test("parseShaderString: substitutes Int(expr) with the globalIntegralValueN uniform for expr's reconciled slot", () => {
@@ -594,6 +649,28 @@ test("isReservedName: true for GLSL built-ins/reserved image tokens, false for a
   stubThrowError();
   assert.equal(m.isReservedName("I_T"), true);
   assert.equal(m.isReservedName("myOwnParamName"), false);
+});
+
+test("isReservedName: true for the names a parameter's uniform would collide with in the shaders", () => {
+  stubThrowError();
+  // GLSL keywords, reserved words and built-ins; names GLSL reserves.
+  for (const name of ["sample", "struct", "mat2", "filter", "length", "texture", "gl_x", "a__b"]) {
+    assert.equal(m.isReservedName(name), true, name);
+  }
+  // Uniforms and functions declared at the shaders' global scope, names in the main()s that
+  // evaluate the user's expressions (e.g. "value", the plotted expression's own variable),
+  // and placeholders substituted into the shaders.
+  for (const name of ["nXDisc", "isTwoD", "imageSourceOne", "main", "uvwqLast", "value", "MINX", "MINY", "ind"]) {
+    assert.equal(m.isReservedName(name), true, name);
+  }
+  // Names local to helper functions, or their parameters, are free.
+  for (const name of ["a", "k", "alpha", "val", "theta"]) assert.equal(m.isReservedName(name), false, name);
+});
+
+test("shaderOutsideHelperFunctions: keeps global scope and main(), dropping other functions' bodies and parameters", () => {
+  const shader = "uniform float g; // float commented\nfloat helper(float p) { float h = p; return h; }\nvoid main() { float m = 1.0; if (m > 0.0) { float n = m; } }";
+  const declared = [...m.shaderOutsideHelperFunctions(shader).matchAll(/float\s+(\w+)/g)].map((x) => x[1]);
+  assert.deepEqual(declared, ["g", "helper", "m", "n"]);
 });
 
 test("validateParamName/validateExpressionName: reject species/reaction/reserved names and names already used by the other feature", () => {

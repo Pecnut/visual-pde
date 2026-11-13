@@ -1018,6 +1018,38 @@ button.focus-params.active {
   padding-bottom: 12px;
 }
 
+/* Highlighted equations, drawn over the plain ones without affecting layout. */
+#equation_display_box {
+  position: relative;
+}
+
+#typeset_equation_highlight {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 12px 5px 12px 2px;
+  border-radius: 6px;
+  background-color: var(--equation-background-color);
+  overflow: hidden;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+#typeset_equation_highlight.visible {
+  visibility: visible;
+}
+
+#typeset_equation_highlight > div {
+  flex: none;
+}
+
+#typeset_equation_highlight > div.pending {
+  position: absolute;
+  visibility: hidden;
+}
+
 #equation_display.flexbox {
   display: flex;
   /* JQuery toggles to flex */

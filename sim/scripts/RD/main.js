@@ -235,6 +235,7 @@ async function VisualPDE(url) {
     vectorFieldFolder,
     devFolder,
     selectedEntries = new Set();
+  let texHighlightGeneration = 0;
   let isRunning,
     isSuspended = false,
     isLoading = true,
@@ -7877,8 +7878,21 @@ async function VisualPDE(url) {
   }
 
   function setEquationDisplayType() {
-    // Given an equation type (specified as an integer selector), set the type of
-    // equation in the UI element that displays the equations.
+    const str = buildEquationDisplayTeX(new Set());
+    if (str == undefined) return;
+    $("#typeset_equation").html(str);
+    runMathJax()?.then(() => {
+      resizeEquationDisplay();
+      updateTeXHighlight();
+    });
+  }
+
+  /**
+   * Builds the TeX for the equation display.
+   * @param {Set<string>} selected - The TeX selection keys of the terms to highlight.
+   * @returns {string|undefined} The TeX, or undefined if a user-defined term has invalid syntax.
+   */
+  function buildEquationDisplayTeX(selected) {
     const numSpeciesInt = parseInt(options.numSpecies);
     let str;
     // The 13-entry hand-written equationTEX array only enumerates every
@@ -8090,7 +8104,7 @@ async function VisualPDE(url) {
       Object.keys(associatedStrs).forEach(function (key) {
         if (!badSyntax) badSyntax |= !isValidSyntax(associatedStrs[key]);
       });
-      if (badSyntax) return;
+      if (badSyntax) return undefined;
 
       // Before we convert the associated strings to default notation, put in placeholders for all
       // user-defined parameters to prevent them from being accidentally recognised as default notation
@@ -8148,7 +8162,7 @@ async function VisualPDE(url) {
 
       // Add in \selected{} to any selected entry.
       const selectCommand = inDarkMode() ? "selectedDark" : "selectedLight";
-      selectedEntries.forEach(function (x) {
+      selected.forEach(function (x) {
         associatedStrs[x] =
           "\\" + selectCommand + "{" + associatedStrs[x] + "}";
       });
@@ -8335,7 +8349,7 @@ async function VisualPDE(url) {
     } else {
       // Even if we're not customising the typesetting, add in \selected{} to any selected entry.
       const selectCommand = inDarkMode() ? "selectedDark" : "selectedLight";
-      selectedEntries.forEach(function (x) {
+      selected.forEach(function (x) {
         str = str.replaceAll(regexes[x], function (match, g1, g2) {
           let val = "\\" + selectCommand + "{" + g1 + " ";
           if (typeof g2 == "string") val += g2;
@@ -8387,10 +8401,7 @@ async function VisualPDE(url) {
     // typeset these rows the same way as everything else in one uniform pass.
     str = appendExpressionRowsToTEX(str);
 
-    str = parseStringToTEX(str);
-
-    $("#typeset_equation").html(str);
-    runMathJax()?.then(resizeEquationDisplay);
+    return parseStringToTEX(str);
   }
 
   /**
@@ -10441,6 +10452,8 @@ async function VisualPDE(url) {
       "--left-ui-v-offset",
       $("#leftGUI")[0].getBoundingClientRect().top,
     );
+
+    fitTeXHighlight();
   }
 
   /**
@@ -10961,7 +10974,7 @@ async function VisualPDE(url) {
     ids.forEach(function (id) {
       selectedEntries.add(id);
     });
-    setEquationDisplayType();
+    updateTeXHighlight();
   }
 
   /**
@@ -10972,7 +10985,86 @@ async function VisualPDE(url) {
     ids.forEach(function (id) {
       selectedEntries.delete(id);
     });
-    setEquationDisplayType();
+    updateTeXHighlight();
+  }
+
+  /**
+   * Shows the selected terms highlighted in an overlay on top of the equation display, or
+   * hides it if nothing is selected. Highlighting can reveal terms (e.g. zero coefficients),
+   * so the highlighted equations are drawn in the overlay and scaled to fit, rather than in
+   * the display itself: resizing the display would move the left GUI beneath it, and with it
+   * the hovered element whose hover triggered the highlight.
+   */
+  function updateTeXHighlight() {
+    const overlay = document.getElementById("typeset_equation_highlight");
+    if (overlay == null) return;
+    const generation = ++texHighlightGeneration;
+    const str =
+      selectedEntries.size > 0 && MathJax.typesetPromise != undefined
+        ? buildEquationDisplayTeX(selectedEntries)
+        : undefined;
+    if (str == undefined) {
+      overlay.classList.remove("visible");
+      clearTeXHighlightOverlay(overlay);
+      return;
+    }
+    const fresh = document.createElement("div");
+    fresh.className = "pending";
+    fresh.textContent = str;
+    overlay.appendChild(fresh);
+    MathJax.typesetPromise([fresh]).then(() => {
+      if (generation != texHighlightGeneration) {
+        MathJax.typesetClear([fresh]);
+        fresh.remove();
+        return;
+      }
+      clearTeXHighlightOverlay(overlay, fresh);
+      fresh.classList.remove("pending");
+      fitTeXHighlight();
+      overlay.classList.add("visible");
+    });
+  }
+
+  /**
+   * Removes every typeset element from the highlight overlay except `keep`.
+   * @param {HTMLElement} overlay - The highlight overlay.
+   * @param {HTMLElement} [keep] - An element to leave in place.
+   */
+  function clearTeXHighlightOverlay(overlay, keep) {
+    [...overlay.children].forEach(function (child) {
+      if (child === keep) return;
+      MathJax.typesetClear?.([child]);
+      child.remove();
+    });
+  }
+
+  /**
+   * Scales the highlighted equations to fit within the equation display.
+   */
+  function fitTeXHighlight() {
+    const overlay = document.getElementById("typeset_equation_highlight");
+    const content = overlay?.querySelector(":scope > div:not(.pending)");
+    if (content == null) return;
+    const restMath = document.querySelector("#typeset_equation mjx-math");
+    const math = content.querySelector("mjx-math");
+    if (restMath != null && math != null)
+      math.style.fontSize = restMath.style.fontSize;
+    content.style.transform = "";
+    const cs = getComputedStyle(overlay);
+    const availWidth =
+      overlay.clientWidth -
+      parseFloat(cs.paddingLeft) -
+      parseFloat(cs.paddingRight);
+    const availHeight =
+      overlay.clientHeight -
+      parseFloat(cs.paddingTop) -
+      parseFloat(cs.paddingBottom);
+    const scale = Math.min(
+      1,
+      availWidth / content.offsetWidth,
+      availHeight / content.offsetHeight,
+    );
+    if (scale < 1) content.style.transform = "scale(" + scale + ")";
   }
 
   /**

@@ -632,7 +632,7 @@ presets["KymographLinearGrowth"] = {
       overlayEpsilon: 0.005,
       overlayExpr: "0.9+0.1*cos(2*pi*x/L_x)",
       plotType: "line",
-      whatToPlot: "u",
+      whatToPlot: "u[x,L_y/2]",
       name: "Spatial plot",
     },
     {
@@ -694,7 +694,7 @@ presets["KymographExponentialGrowth"] = {
       overlayEpsilon: 0.005,
       overlayExpr: "0.9+0.1*cos(2*pi*x/L_x)",
       plotType: "line",
-      whatToPlot: "u",
+      whatToPlot: "u[x,L_y/2]",
       name: "Spatial plot",
     },
     {

@@ -950,6 +950,10 @@ button.focus-params.active {
   }
 }
 
+#comboBCs_ui li {
+  border-bottom: 1px solid #eee !important;
+}
+
 #comboBCs_ui input {
   position: relative;
   right: 2px !important;
